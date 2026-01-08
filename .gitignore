@@ -1,0 +1,12 @@
+# PlatformIO / ESP32 build mappák (hatalmasak és feleslegesek)
+.pio/
+.vscode/
+
+# Python / Mac szemetek
+__pycache__/
+*.pyc
+venv/
+.DS_Store
+
+# Titkos adatok (Jelszavak!) EZ ELÉG FONTOS
+secrets.h
