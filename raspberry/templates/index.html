@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mérnöki Központ</title>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 { border-bottom: 2px solid #58a6ff; display: inline-block; padding-bottom: 10px; margin-bottom: 30px; }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            justify-items: center;
+        }
+        
+        .camera-card {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 450px;
+            position: relative; /* Fontos a gomb pozicionálásához */
+        }
+        
+        .camera-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        
+        .status-dot {
+            height: 12px; width: 12px;
+            background-color: #808080;
+            border-radius: 50%;
+            display: inline-block; margin-right: 5px;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        .status-online { background-color: #00ff00; box-shadow: 0 0 8px #00ff00; }
+        .status-offline { background-color: #ff0000; box-shadow: 0 0 8px #ff0000; }
+        .status-standby { background-color: #ffa500; box-shadow: 0 0 8px #ffa500; } /* Narancs */
+
+        img {
+            width: 100%; height: auto;
+            border-radius: 4px; border: 1px solid #30363d;
+            min-height: 240px; background-color: #000;
+        }
+
+        /* A varázsgomb stílusa */
+        .retry-overlay {
+            display: none; /* Alapból rejtve */
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+
+        .retry-btn {
+            background-color: #238636;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(0,0,0,0.8);
+            font-family: 'Courier New', monospace;
+        }
+        .retry-btn:hover { background-color: #2ea043; }
+
+    </style>
+</head>
+<body>
+
+    <h1>BIZTONSÁGI RENDSZER v2.1</h1>
+
+    <div class="dashboard">
+        {% for id, cam in cameras.items() %}
+        <div class="camera-card">
+            <div class="camera-header">
+                <span>CAM-0{{ id }} [{{ cam.name }}]</span>
+                <span id="status-text-{{ id }}">
+                    <span id="dot-{{ id }}" class="status-dot"></span>
+                    <span id="label-{{ id }}">LOADING...</span>
+                </span>
+            </div>
+            
+            <img src="{{ url_for('video_feed', camera_id=id) }}" alt="Kamera Stream">
+
+            <div id="retry-overlay-{{ id }}" class="retry-overlay">
+                <button class="retry-btn" onclick="retryCamera({{ id }})">↻ ÚJRACSATLAKOZÁS</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        function updateStatus() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    for (const [id, info] of Object.entries(data)) {
+                        const dot = document.getElementById(`dot-${id}`);
+                        const label = document.getElementById(`label-${id}`);
+                        const overlay = document.getElementById(`retry-overlay-${id}`);
+                        
+                        // Állapot logika
+                        if (info.status === 'online') {
+                            dot.className = "status-dot status-online";
+                            label.innerText = "LIVE";
+                            label.style.color = "#00ff00";
+                            overlay.style.display = "none";
+                        } else if (info.status === 'offline') {
+                            dot.className = "status-dot status-offline";
+                            label.innerText = "KERESÉS (" + info.retries + "/5)";
+                            label.style.color = "#ff0000";
+                            overlay.style.display = "none";
+                        } else if (info.status === 'standby') {
+                            dot.className = "status-dot status-standby";
+                            label.innerText = "MEGSZAKADT";
+                            label.style.color = "#ffa500";
+                            overlay.style.display = "block"; // Gomb megjelenítése!
+                        }
+                    }
+                });
+        }
+
+        // Gombnyomás funkció
+        function retryCamera(id) {
+            fetch(`/reset_camera/${id}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Újracsatlakozás kérése elküldve: " + id);
+                    // Azonnal frissítünk, hogy a felhasználó lássa a reakciót
+                    updateStatus();
+                });
+        }
+
+        setInterval(updateStatus, 1000); // 1 másodpercenként frissítünk
+        updateStatus(); 
+    </script>
+
+</body>
+</html>
