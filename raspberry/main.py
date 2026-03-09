@@ -1,13 +1,18 @@
 import cv2
 import time
 import numpy as np
-from flask import Flask, render_template, Response, jsonify
+import threading
+import queue
+import os
+from datetime import datetime
+from flask import Flask, render_template, Response, jsonify, send_from_directory
 
 app = Flask(__name__)
 
 # --- KONFIGURÁCIÓ ---
-# Hányszor próbálkozzon, mielőtt feladja?
 MAX_RETRIES = 5 
+RECORDING_ENABLED = False
+REC_W, REC_H = 640, 480 # Standard felbontás a stabil rögzítéshez
 
 CAMERAS = {
     0: {"name": "Nappali (ESP32)", "url": "http://192.168.1.87:81/stream"},
@@ -17,72 +22,132 @@ CAMERAS = {
     4: {"name": "Bejárat",         "url": "http://192.168.0.109:81/stream"},
 }
 
-# Állapotok tárolása
-# status: 'online' (zöld), 'offline' (piros - épp próbálkozik), 'standby' (sárga - feladta)
-camera_states = {
-    0: {'status': 'offline', 'retries': 0},
-    1: {'status': 'offline', 'retries': 0},
-    2: {'status': 'offline', 'retries': 0},
-    3: {'status': 'offline', 'retries': 0},
-    4: {'status': 'offline', 'retries': 0}
-}
+camera_states = {cam_id: {'status': 'offline', 'retries': 0} for cam_id in CAMERAS}
 
 def generate_noise(text="NO SIGNAL"):
-    """Zaj generálása felirattal"""
-    noise = np.random.randint(0, 256, (240, 320, 3), dtype=np.uint8)
-    # Szöveg középre igazítása (kb)
-    cv2.putText(noise, text, (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-    return noise
+    """Zaj generálása a standardizált REC felbontásban"""
+    noise = np.random.randint(0, 256, (REC_H, REC_W, 3), dtype=np.uint8)
+    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 3)[0]
+    text_x = (REC_W - text_size[0]) // 2
+    text_y = (REC_H + text_size[1]) // 2
+    cv2.putText(noise, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+    ret, buffer = cv2.imencode('.jpg', noise)
+    return buffer.tobytes()
 
-def get_frame(camera_id):
+NOISE_FRAME = generate_noise("KERESES...")
+OFFLINE_FRAME = generate_noise("KAPCSOLAT MEGSZAKADT")
+
+# Memória és írási pufferek inicializálása
+latest_frames = {cam_id: NOISE_FRAME for cam_id in CAMERAS}
+write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
+
+
+# ==========================================
+# 1. HÁLÓZATI OLVASÓ SZÁL (Producer)
+# ==========================================
+def camera_worker(camera_id):
+    global RECORDING_ENABLED
     url = CAMERAS[camera_id]["url"]
-    
+
     while True:
-        # 1. Ellenőrizzük, hogy nem adtuk-e már fel
         if camera_states[camera_id]['retries'] >= MAX_RETRIES:
             camera_states[camera_id]['status'] = 'standby'
-            # Nem próbálunk csatlakozni, csak zajt küldünk (kíméljük a CPU-t)
-            noise = generate_noise("KAPCSOLAT MEGSZAKADT")
-            ret, buffer = cv2.imencode('.jpg', noise)
-            yield (b'--frame\r\n'b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(1) # Ritkábban frissítjük a zajt standby módban
+            latest_frames[camera_id] = OFFLINE_FRAME
+            time.sleep(1)
             continue
 
-        # 2. Ha még van "életünk", próbálunk csatlakozni
         cap = cv2.VideoCapture(url)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        
-        # Gyors ellenőrzés
         success, frame = cap.read()
-        
+
         if success:
-            # SIKER! Nullázzuk a számlálót
             camera_states[camera_id]['status'] = 'online'
             camera_states[camera_id]['retries'] = 0
-            
-            # Streameljük a videót, amíg meg nem szakad
+
             while True:
                 success, frame = cap.read()
                 if not success:
                     break
+                
+                # Standardizáljuk a méretet a hibamentes kodekhez
+                if frame.shape[1] != REC_W or frame.shape[0] != REC_H:
+                    frame = cv2.resize(frame, (REC_W, REC_H), interpolation=cv2.INTER_LINEAR)
+
+                # OSD (Feliratok)
+                cam_name = CAMERAS[camera_id]["name"]
+                timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                osd_text = f"{cam_name} | {timestamp_str}"
+                cv2.putText(frame, osd_text, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                cv2.putText(frame, osd_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                # RAM frissítése az élőképhez
                 ret, buffer = cv2.imencode('.jpg', frame)
-                yield (b'--frame\r\n'b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            
-            # Ha kilépett a while-ból, megszakadt a kapcsolat
+                if ret:
+                    latest_frames[camera_id] = buffer.tobytes()
+
+                # Sorba rakás a rögzítéshez
+                if RECORDING_ENABLED:
+                    try:
+                        write_queues[camera_id].put_nowait(frame.copy())
+                    except queue.Full:
+                        pass 
+
             cap.release()
         else:
-            # HIBA! Növeljük a számlálót
             camera_states[camera_id]['status'] = 'offline'
             camera_states[camera_id]['retries'] += 1
-            print(f"Kamera {camera_id} hiba. Próbálkozás: {camera_states[camera_id]['retries']}/{MAX_RETRIES}")
+            latest_frames[camera_id] = NOISE_FRAME
             cap.release()
-            
-            # Küldünk egy kis zajt, amíg újra nem próbálkozunk
-            noise = generate_noise("KERESES...")
-            ret, buffer = cv2.imencode('.jpg', noise)
-            yield (b'--frame\r\n'b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            # Kicsit várunk a következő próbálkozás előtt (hogy ne floodoljuk a hálózatot)
             time.sleep(0.5)
+
+
+# ==========================================
+# 2. SD KÁRTYA ÍRÓ SZÁL (Consumer)
+# ==========================================
+def writer_worker(camera_id):
+    global RECORDING_ENABLED
+    out = None
+
+    while True:
+        try:
+            frame = write_queues[camera_id].get(timeout=0.5)
+            
+            if RECORDING_ENABLED and out is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                # --- TELJES ÁTÁLLÁS WEBM/VP8-RA ---
+                filename = f"archivum/cam_{camera_id}_{timestamp}.webm"
+                fourcc = cv2.VideoWriter_fourcc(*'VP80')
+                out = cv2.VideoWriter(filename, fourcc, 15.0, (int(REC_W), int(REC_H)))
+                
+                print(f"[REC] Kamera {camera_id}: Mentés indítva -> {filename}")
+
+            if out is not None:
+                out.write(frame)
+
+        except queue.Empty:
+            if not RECORDING_ENABLED and out is not None:
+                out.release()
+                out = None
+                print(f"[STOP] Kamera {camera_id}: Mentés lezárva.")
+
+
+# --- SZÁLAK ELINDÍTÁSA ---
+for cam_id in CAMERAS:
+    threading.Thread(target=camera_worker, args=(cam_id,), daemon=True).start()
+    threading.Thread(target=writer_worker, args=(cam_id,), daemon=True).start()
+
+
+# ==========================================
+# 3. A WEBSZERVER (CONSUMER)
+# ==========================================
+def generate_web_stream(camera_id):
+    while True:
+        frame_bytes = latest_frames.get(camera_id)
+        if frame_bytes is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        time.sleep(0.03)
 
 @app.route('/')
 def index():
@@ -90,19 +155,39 @@ def index():
 
 @app.route('/video_feed/<int:camera_id>')
 def video_feed(camera_id):
-    return Response(get_frame(camera_id), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_web_stream(camera_id), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/toggle_record', methods=['POST'])
+def toggle_record():
+    global RECORDING_ENABLED
+    RECORDING_ENABLED = not RECORDING_ENABLED
+    állapot = "ELINDÍTVA" if RECORDING_ENABLED else "LEÁLLÍTVA"
+    print(f"\n--- KÖZPONTI RÖGZÍTÉS {állapot} ---\n")
+    return jsonify({"recording": RECORDING_ENABLED})
 
 @app.route('/status')
 def status():
-    """Visszaadja a frontendnek az állapotokat"""
     return jsonify(camera_states)
 
-@app.route('/reset_camera/<int:camera_id>')
-def reset_camera(camera_id):
-    """Gombnyomásra nullázza a hibaszámlálót"""
-    camera_states[camera_id]['retries'] = 0
-    camera_states[camera_id]['status'] = 'offline'
-    return jsonify({"success": True})
+# --- ARCHÍVUM API JAVÍTVA WEBM-RE ---
+@app.route('/api/videos')
+def list_videos():
+    """Visszaadja a mentett videók listáját (mp4 és webm is játszik)."""
+    if not os.path.exists('archivum'):
+        return jsonify([])
+    
+    # Megkeressük az összes .webm és .mp4 kiterjesztésű fájlt is
+    files = [f for f in os.listdir('archivum') if f.endswith(('.mp4', '.webm'))]
+    files.sort(reverse=True)
+    return jsonify(files)
+
+@app.route('/archivum_video/<filename>')
+def serve_video(filename):
+    return send_from_directory('archivum', filename)
+
 
 if __name__ == '__main__':
+    if not os.path.exists('archivum'):
+        os.makedirs('archivum')
+        
     app.run(host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc', threaded=True)
