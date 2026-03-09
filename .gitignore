@@ -10,3 +10,5 @@ venv/
 
 # Titkos adatok (Jelszavak!) EZ ELÉG FONTOS
 secrets.h
+
+archivum/
