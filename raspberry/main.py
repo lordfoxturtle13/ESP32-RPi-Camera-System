@@ -3,6 +3,7 @@ import time
 import numpy as np
 import threading
 import queue
+from flask import jsonify
 import os
 from datetime import datetime
 from flask import Flask, render_template, Response, jsonify, send_from_directory
@@ -15,7 +16,7 @@ RECORDING_ENABLED = False
 REC_W, REC_H = 640, 480 # Standard felbontás a stabil rögzítéshez
 
 CAMERAS = {
-    0: {"name": "Nappali (ESP32)", "url": "http://192.168.1.87:81/stream"},
+    0: {"name": "Nappali (ESP32)", "url": "rtsp://192.168.1.87:554/mjpeg/1"},
     1: {"name": "Konyha",          "url": "http://192.168.0.106:81/stream"},
     2: {"name": "Garázs",          "url": "http://192.168.0.107:81/stream"},
     3: {"name": "Kert",            "url": "http://192.168.0.108:81/stream"},
@@ -86,7 +87,7 @@ def camera_worker(camera_id):
                     latest_frames[camera_id] = buffer.tobytes()
 
                 # Sorba rakás a rögzítéshez
-                if RECORDING_ENABLED:
+                if recording_flags[camera_id]:
                     try:
                         write_queues[camera_id].put_nowait(frame.copy())
                     except queue.Full:
@@ -105,20 +106,19 @@ def camera_worker(camera_id):
 # 2. SD KÁRTYA ÍRÓ SZÁL (Consumer)
 # ==========================================
 def writer_worker(camera_id):
-    global RECORDING_ENABLED
     out = None
 
     while True:
         try:
             frame = write_queues[camera_id].get(timeout=0.5)
             
-            if RECORDING_ENABLED and out is None:
+            if recording_flags[camera_id] and out is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 # --- TELJES ÁTÁLLÁS WEBM/VP8-RA ---
                 filename = f"archivum/cam_{camera_id}_{timestamp}.webm"
                 fourcc = cv2.VideoWriter_fourcc(*'VP80')
-                out = cv2.VideoWriter(filename, fourcc, 15.0, (int(REC_W), int(REC_H)))
+                out = cv2.VideoWriter(filename, fourcc, 5.0, (int(REC_W), int(REC_H)))
                 
                 print(f"[REC] Kamera {camera_id}: Mentés indítva -> {filename}")
 
@@ -126,7 +126,7 @@ def writer_worker(camera_id):
                 out.write(frame)
 
         except queue.Empty:
-            if not RECORDING_ENABLED and out is not None:
+            if not recording_flags[camera_id] and out is not None:
                 out.release()
                 out = None
                 print(f"[STOP] Kamera {camera_id}: Mentés lezárva.")
@@ -157,13 +157,17 @@ def index():
 def video_feed(camera_id):
     return Response(generate_web_stream(camera_id), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/toggle_record', methods=['POST'])
-def toggle_record():
-    global RECORDING_ENABLED
-    RECORDING_ENABLED = not RECORDING_ENABLED
-    állapot = "ELINDÍTVA" if RECORDING_ENABLED else "LEÁLLÍTVA"
-    print(f"\n--- KÖZPONTI RÖGZÍTÉS {állapot} ---\n")
-    return jsonify({"recording": RECORDING_ENABLED})
+# A kamerák független rögzítési állapota
+recording_flags = {cam_id: False for cam_id in CAMERAS}
+
+@app.route('/toggle_record/<int:camera_id>', methods=['POST'])
+def toggle_record(camera_id):
+    if camera_id in CAMERAS:
+        recording_flags[camera_id] = not recording_flags[camera_id]
+        állapot = "ELINDÍTVA" if recording_flags[camera_id] else "LEÁLLÍTVA"
+        print(f"\n--- Kamera {camera_id} RÖGZÍTÉS: {állapot} ---\n")
+        return jsonify({"camera_id": camera_id, "recording": recording_flags[camera_id]})
+    return jsonify({"error": "Camera not found"}), 404
 
 @app.route('/status')
 def status():
@@ -172,11 +176,9 @@ def status():
 # --- ARCHÍVUM API JAVÍTVA WEBM-RE ---
 @app.route('/api/videos')
 def list_videos():
-    """Visszaadja a mentett videók listáját (mp4 és webm is játszik)."""
     if not os.path.exists('archivum'):
         return jsonify([])
     
-    # Megkeressük az összes .webm és .mp4 kiterjesztésű fájlt is
     files = [f for f in os.listdir('archivum') if f.endswith(('.mp4', '.webm'))]
     files.sort(reverse=True)
     return jsonify(files)
@@ -184,6 +186,15 @@ def list_videos():
 @app.route('/archivum_video/<filename>')
 def serve_video(filename):
     return send_from_directory('archivum', filename)
+
+@app.route('/api/reset/<int:camera_id>', methods=['POST'])
+def reset_camera(camera_id):
+    if camera_id in camera_states:
+        # A próbálkozások nullázása újraindítja a csatlakozási folyamatot a worker szálban
+        camera_states[camera_id]['retries'] = 0
+        camera_states[camera_id]['status'] = 'connecting'
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Kamera nem található"}), 404
 
 
 if __name__ == '__main__':

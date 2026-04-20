@@ -1,21 +1,19 @@
 <!DOCTYPE html>
 <html lang="hu">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Camera Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css')}}"> <!--Ez egy speciális Flask linkelés-->
+    <title>Kamera projekt</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css')}}">
 </head>
-<body>
 
+<body>
     <div class="sidebar">
         <h2>Menü</h2>
-        <div class="menu-item" onclick="showLive()">🔴 Élő Kép</div>
-        <div class="menu-item" onclick="showArchive()">📁 Archívum</div>
-        <div class="menu-item">⚙️ Beállítások</div>
-        <div class="menu-item" id="rec-btn" onclick="toggleRecord()" style="font-weight: bold;">
-            ⏺ Felvétel (KI)
-        </div>
+        <div class="menu-item" onclick="showLive()">Élő Kép</div>
+        <div class="menu-item" onclick="showArchive()">Archívum</div>
+        <div class="menu-item">Beállítások</div>
     </div>
 
     <div class="main-content">
@@ -23,117 +21,55 @@
             <button class="hamburger-btn" onclick="toggleSidebar()">☰ Menü</button>
         </div>
 
-        <div id="live-view" class="camera-grid">
-            {% for camera_id in cameras %}
-            <div class="video-container">
-                <img src="{{ url_for('video_feed', camera_id=camera_id) }}" alt="Élő stream ({{ camera_id }})" onclick="toggleFullScreen(this)">
+        <div id="live-view" style="width: 100%;">
+            <h1 style="text-align: center; color: var(--accent-color); margin-top: 0;">Központi Kamera Rendszer</h1>
+
+            <div class="global-controls">
+                <button id="record-all-btn" class="btn btn-global-record" onclick="toggleAllRecords()">
+                    🔴 Összes Felvétele
+                </button>
             </div>
-            {% endfor %}
+
+            <div class="camera-grid">
+                {% for camera_id in cameras %}
+                <div class="camera-card">
+
+                    <div class="card-header">
+                        <h3 class="camera-title">Kamera: {{ camera_id }}</h3>
+                        <div class="card-actions">
+                            <button id="record-btn-{{ camera_id }}" class="btn btn-record"
+                                onclick="toggleRecord('{{ camera_id }}')">
+                                ⏺ Felvétel
+                            </button>
+                            <button class="btn btn-reset" onclick="resetCamera('{{ camera_id }}')"
+                                title="Újracsatlakozás">
+                                🔄
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="feed-container">
+                        <img src="{{ url_for('video_feed', camera_id=camera_id) }}" id="feed-{{ camera_id }}"
+                            class="camera-feed" onclick="toggleFullScreen(this)" alt="Élő stream ({{ camera_id }})">
+                    </div>
+
+                </div>
+                {% endfor %}
+            </div>
         </div>
 
-        <div id="archive-view" class="hidden" style="width: 100%; display: flex; flex-direction: column; gap: 20px;">
+        <div id="archive-view" class="hidden"
+            style="width: 100%; display: flex; flex-direction: column; gap: 20px; align-items: center;">
             <h2 style="color: var(--accent-color); margin-top: 0;">Mentett felvételek</h2>
-            
+
             <div id="video-list" class="video-list-grid"></div>
-            
+
             <div id="player-container" class="hidden" style="width: 100%; max-width: 1000px; margin: 0 auto;">
-                <video id="archive-player" controls style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color);"></video>
+                <video id="archive-player" controls
+                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color);"></video>
             </div>
         </div>
 
-    </div>
-    <script>
-        function toggleSidebar() {
-            const sidebar = document.querySelector('.sidebar');
-            sidebar.classList.toggle('hidden');
-        }
-        function toggleRecord() {
-            fetch('/toggle_record', { method: 'POST' })
-            .then(response => response.json())
-            .then(data => {
-                const btn = document.getElementById('rec-btn');
-                if (data.recording) {
-                    btn.innerHTML = '⏹ Felvétel (BE)';
-                    btn.style.backgroundColor = '#ff4444';
-                    btn.style.color = '#ffffff';
-                } else {
-                    btn.innerHTML = '⏺ Felvétel (KI)';
-                    btn.style.backgroundColor = '#2c2c2c';
-                    btn.style.color = 'var(--text-color)';
-                }
-            })
-            .catch(error => console.error('Hiba:', error));
-        }
-        // ÚJ: Teljes képernyős nézet kezelése (Maces kompatibilitással)
-        function toggleFullScreen(element) {
-            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                // Ha nem vagyunk fullscreenben, belépünk
-                if (element.requestFullscreen) {
-                    element.requestFullscreen();
-                } else if (element.webkitRequestFullscreen) { /* Safari / macOS */
-                    element.webkitRequestFullscreen();
-                }
-            } else {
-                // Ha fullscreenben vagyunk, kilépünk (bár erre az Esc gomb is jó)
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                } else if (document.webkitExitFullscreen) { /* Safari / macOS */
-                    document.webkitExitFullscreen();
-                }
-            }
-        }
-        // --- NÉZETEK VÁLTÁSA ---
-        function showLive() {
-            document.getElementById('live-view').classList.remove('hidden');
-            document.getElementById('archive-view').classList.add('hidden');
-            
-            // Leállítjuk az archív videót, ha épp ment
-            const player = document.getElementById('archive-player');
-            player.pause();
-        }
-
-        function showArchive() {
-            document.getElementById('live-view').classList.add('hidden');
-            document.getElementById('archive-view').classList.remove('hidden');
-            loadVideoList(); // Frissítjük a listát a szerverről
-        }
-
-        // --- ARCHÍVUM BETÖLTÉSE ÉS LEJÁTSZÁS ---
-        function loadVideoList() {
-            fetch('/api/videos')
-            .then(response => response.json())
-            .then(files => {
-                const list = document.getElementById('video-list');
-                list.innerHTML = ''; // Lista ürítése
-                
-                if (files.length === 0) {
-                    list.innerHTML = '<p style="color: var(--text-color);">Nincsenek mentett felvételek az archivum mappában.</p>';
-                    return;
-                }
-                
-                files.forEach(file => {
-                    const btn = document.createElement('button');
-                    btn.className = 'video-item-btn';
-                    btn.innerText = "🎥 " + file;
-                    btn.onclick = () => playVideo(file);
-                    list.appendChild(btn);
-                });
-            })
-            .catch(err => console.error("Hiba a videók lekérésekor:", err));
-        }
-
-        function playVideo(filename) {
-            document.getElementById('player-container').classList.remove('hidden');
-            const player = document.getElementById('archive-player');
-            
-            // Ha épp ment valami, megállítjuk
-            player.pause(); 
-            
-            // Új forrás betöltése
-            player.innerHTML = `<source src="/archivum_video/${filename}" type="video/${filename.endsWith('.webm') ? 'webm' : 'mp4'}">`;
-            player.load(); // Kényszerített újratöltés
-            player.play();
-        }
-    </script>
+    </div><script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

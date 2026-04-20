@@ -16,6 +16,7 @@ body {
     overflow: hidden;
 }
 
+/* --- OLDALSÁV (SIDEBAR) ÉS NAVIGÁCIÓ --- */
 .sidebar {
     width: 250px;
     min-width: 250px;
@@ -30,7 +31,7 @@ body {
 }
 
 .sidebar.hidden {
-    margin-left: -250px; /* 250px width + 40px padding + 1px border */
+    margin-left: -250px; 
 }
 
 .header-controls {
@@ -39,7 +40,7 @@ body {
     justify-content: flex-start;
     padding-bottom: 10px;
 }
-/* ÚJ: Hamburger gomb dizájn */
+
 .hamburger-btn {
     background-color: var(--sidebar-bg);
     color: var(--text-color);
@@ -80,79 +81,148 @@ body {
     color: #000;
 }
 
-/* Fő tartalom - engedjük, hogy kitöltse a teret */
+/* --- FŐ TARTALOM --- */
 .main-content {
     flex-grow: 1;
-    padding: 4px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
     overflow-y: auto;
 }
 
-/* A PROFI KAMERA MÁTRIX */
+/* --- GLOBÁLIS VEZÉRLŐK --- */
+.global-controls {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+/* --- KAMERA RÁCS ÉS KÁRTYÁK (ÚJ) --- */
 .camera-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px; 
+    /* Automatikusan alkalmazkodik a képernyőhöz, min. 400px széles kártyákkal */
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 15px; 
     width: 100%;
     max-width: none;
     margin-bottom: 20px;
 }
 
-/* Videó konténer (kikerült a fix max-width) */
-.video-container {
-    width: 100%;
+.camera-card {
     background-color: var(--sidebar-bg);
-    border-radius: 4px; 
+    border-radius: 6px; 
     border: 1px solid var(--border-color);
     overflow: hidden;
-    box-shadow: none;
     display: flex;
     flex-direction: column;
 }
 
-.video-container h3 {
-    text-align: center;
-    color: var(--accent-color);
-    padding: 8px 0;
-    margin: 0;
-    font-size: 1rem;
-    border-bottom: 1px solid var(--border-color);
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
     background-color: #08101f;
+    border-bottom: 1px solid var(--border-color);
 }
 
-.video-container img {
+.camera-title {
+    margin: 0;
+    color: var(--accent-color);
+    font-size: 1rem;
+    font-weight: bold;
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* --- GOMBOK ÉS ÁLLAPOTOK (ÚJ) --- */
+.btn {
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    transition: all 0.3s ease;
+}
+
+.btn-record { 
+    background-color: #2c2c2c; 
+    color: var(--text-color); 
+    border: 1px solid var(--border-color); 
+}
+
+.btn-reset { 
+    background-color: var(--accent-color); 
+    color: #fff; 
+}
+
+.btn-global-record { 
+    background-color: #15803d; /* Sötétebb zöld */
+    color: white; 
+    padding: 10px 20px; 
+    font-size: 1.1rem;
+    border-radius: 6px;
+}
+
+/* Felvétel aktív animációi */
+.btn-record.recording, 
+.btn-global-record.recording { 
+    background-color: #ef4444; /* Piros */
+    color: white;
+    border-color: #ef4444;
+    animation: pulse 1.5s infinite; 
+}
+
+.recording-border {
+    border: 3px solid #ef4444;
+    box-sizing: border-box;
+    animation: border-pulse 1.5s infinite;
+}
+
+/* --- VIDEÓ FEED --- */
+.feed-container {
+    width: 100%;
+    background-color: #000;
+}
+
+.camera-feed {
     width: 100%;
     height: auto;
     max-height: 40vh;
     display: block;
-    aspect-ratio: auto; /*Fontos érték*/
+    aspect-ratio: auto;
     object-fit: contain;
-    background-color: #000;
-
-    cursor: pointer;
     transition: transform 0.2s ease;
 }
 
-/*
-.video-container img:hover {
-    transform: scale(1.02);
-    box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+/* --- ANIMÁCIÓS KULCSKOCKÁK --- */
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.03); }
+    100% { transform: scale(1); }
 }
-*/
 
-/* Segédosztály az elemek elrejtésére */
+@keyframes border-pulse {
+    0% { border-color: #ef4444; }
+    50% { border-color: #7f1d1d; }
+    100% { border-color: #ef4444; }
+}
+
+/* --- ARCHÍVUM NÉZET --- */
 .hidden {
     display: none !important;
 }
 
 .video-list-grid {
     display: flex;
-    flex-direction: column; /* Egymás alá kényszeríti az elemeket */
+    flex-direction: column; 
     gap: 8px;
     width: 100%;
-    max-width: 600px; /* Ne nyúljon el a képernyő széléig */
+    max-width: 600px; 
 }
 
 .video-item-btn {
