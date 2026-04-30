@@ -3,235 +3,302 @@ import time
 import numpy as np
 import threading
 import queue
-from flask import jsonify
 import os
+import requests
 from datetime import datetime
 from flask import Flask, render_template, Response, jsonify, send_from_directory
 import imageio
-
+ 
 app = Flask(__name__)
-
-# --- KONFIGURÁCIÓ ---
-MAX_RETRIES = 5 
-RECORDING_ENABLED = False
-REC_W, REC_H = 640, 480
-
-FRAME_DURATION_MS = 150
-CALCULATED_FPS = 1000 / FRAME_DURATION_MS
-
-#Egyszerű statikus változó, amiben a kamerák neveit és IP címüket írom bele
+ 
+# ==========================================
+# KONFIGURÁCIÓ — itt szerkesztsd a beállításokat
+# ==========================================
+ 
+MAX_RETRIES       = 5          # Ennyi sikertelen csatlakozás után áll "standby"-ba a kamera
+REC_W, REC_H      = 640, 480   # Rögzítési felbontás (minden kamera erre standardizálódik)
+FRAME_DURATION_MS = 150        # Webstream képkocka-időköz (150ms ≈ ~6.6 FPS)
+CALCULATED_FPS    = 1000 / FRAME_DURATION_MS
+ARCHIVE_DIR       = "archivum" # Felvételek mentési mappája
+ 
+# RPi4 hardveres H.264 enkóder (V4L2 M2M) — kb. 5-10x kevesebb CPU mint szoftveres libx264.
+# Ha PC-n teszteled, írd vissza: "libx264"
+H264_CODEC = "h264_v4l2m2m"
+ 
+# Kamera konfiguráció
+# led_url: ESP32-CAM standard firmware flash LED endpointja.
+#          Ha egy kamerának nincs LED-je, hagyd ki a kulcsot.
 CAMERAS = {
-    0: {"name": "Nappali (ESP32)", "url": "rtsp://192.168.1.87:554/mjpeg/1"},
-    1: {"name": "Konyha",          "url": "http://192.168.0.106:81/stream"},
-    2: {"name": "Garázs",          "url": "http://192.168.0.107:81/stream"},
-    3: {"name": "Kert",            "url": "http://192.168.0.108:81/stream"},
-    4: {"name": "Bejárat",         "url": "http://192.168.0.109:81/stream"},
+    0: {
+        "name"    : "Nappali (ESP32)",
+        "url"     : "rtsp://192.168.1.87:554/mjpeg/1",
+        "led_url" : "http://192.168.1.87/flash",
+    },
+    1: {"name": "Konyha",   "url": "http://192.168.0.106:81/stream"},
+    2: {"name": "Garázs",   "url": "http://192.168.0.107:81/stream"},
+    3: {"name": "Kert",     "url": "http://192.168.0.108:81/stream"},
+    4: {"name": "Bejárat",  "url": "http://192.168.0.109:81/stream"},
 }
-# ez a változó tárolja, hogy milyen állásban vannak a kamerák
-camera_states = {cam_id: {'status': 'offline', 'retries': 0} for cam_id in CAMERAS}
-
-# ezzel a függvénnyel generáltatok zaj-t, arra az esetre, amikor nincsen csatlakoztatva kamera
-def generate_noise(text="NO SIGNAL"):
-    """Zaj generálása a standardizált REC felbontásban"""
-    noise = np.random.randint(0, 256, (REC_H, REC_W, 3), dtype=np.uint8)
-    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 3)[0]
-    text_x = (REC_W - text_size[0]) // 2
-    text_y = (REC_H + text_size[1]) // 2
-    cv2.putText(noise, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
-    ret, buffer = cv2.imencode('.jpg', noise)
-    return buffer.tobytes()
-
-NOISE_FRAME = generate_noise("KERESES...")
-OFFLINE_FRAME = generate_noise("KAPCSOLAT MEGSZAKADT")
-
-# Memória és írási pufferek inicializálása
-# Egy szótár, ami folyamatosan, másodpercenként többször felülíródik a 
-# legfrissebb képkockával. Ezt olvassa ki a webszerver, hogy megmutassa neked az élőképet.
-latest_frames = {cam_id: NOISE_FRAME for cam_id in CAMERAS}
-#(Írási Sor): Ez a legfontosabb "csővezeték" a szálak között. A kamerát olvasó szál ide dobálja be a képeket, 
-# az író szál pedig innen veszi ki őket,
-# hogy elmentse a pendrive-ra. A maxsize=30 megakadályozza, hogy a RAM beteljen, ha a pendrive túl lassú lenne.
+ 
+# ==========================================
+# MEGOSZTOTT ÁLLAPOT
+# Fontos: mind a 4 dict itt van definiálva, a szálak indítása ELŐTT.
+# ==========================================
+ 
+# Kamerák hálózati állapota és újracsatlakozási számlálója
+camera_states = {cam_id: {"status": "offline", "retries": 0} for cam_id in CAMERAS}
+ 
+# Felvételi zászlók — Flask route állítja, writer_worker olvassa
+recording_flags = {cam_id: False for cam_id in CAMERAS}
+ 
+# LED állapotok — csak led_url-lel rendelkező kamerákhoz
+led_states = {cam_id: False for cam_id in CAMERAS if CAMERAS[cam_id].get("led_url")}
+ 
+# Képkocka sor a felvevő szálnak (maxsize=30 gátolja a RAM telítődést lassú írás esetén)
 write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
-
-
+ 
+ 
+def generate_dark_frame():
+    """
+    Egyszerű fekete JPEG képkocka offline állapothoz.
+    A vizuális megjelenítés (ikon, szöveg) a frontend CSS/JS feladata —
+    így sávszélesség takarékos. Quality=10 → ~1-2 KB fájlméret.
+    """
+    frame = np.zeros((REC_H, REC_W, 3), dtype=np.uint8)
+    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 10])
+    return buffer.tobytes()
+ 
+ 
+FRAME_OFFLINE = generate_dark_frame()
+ 
+# Élőkép RAM-puffer: camera_worker szálak ide írják a legfrissebb JPEG-et,
+# a webszerver innen olvassa ki. Python GIL védi a dict-hozzáférést.
+latest_frames = {cam_id: FRAME_OFFLINE for cam_id in CAMERAS}
+ 
+ 
 # ==========================================
-# 1. HÁLÓZATI OLVASÓ SZÁL (Producer)
+# 1. HÁLÓZATI OLVASÓ SZÁL — Producer
 # ==========================================
+ 
 def camera_worker(camera_id):
-    global RECORDING_ENABLED
-    url = CAMERAS[camera_id]["url"]
-
+    url      = CAMERAS[camera_id]["url"]
+    cam_name = CAMERAS[camera_id]["name"]
+ 
     while True:
-        if camera_states[camera_id]['retries'] >= MAX_RETRIES:
-            camera_states[camera_id]['status'] = 'standby'
-            latest_frames[camera_id] = OFFLINE_FRAME
+ 
+        # Standby: max újracsatlakozási kísérlet elérve, várunk amíg a reset endpoint nem nulláz
+        if camera_states[camera_id]["retries"] >= MAX_RETRIES:
+            camera_states[camera_id]["status"] = "standby"
+            latest_frames[camera_id] = FRAME_OFFLINE
             time.sleep(1)
             continue
-
-        cap = cv2.VideoCapture(url) #ezzel kapcsolódok a kamerákra
+ 
+        cap = cv2.VideoCapture(url)
+ 
+        # CAP_PROP_BUFFERSIZE=1: csak a legfrissebb képkocka kerül a belső pufferbe,
+        # megakadályozva a késleltetést (lag) amit a pufferelés okozna.
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        #egy nagyon fontos mérnöki trükk: kikényszeríti, hogy a rendszer ne tárazza be a régi képeket, 
-        # hanem mindig a legfrissebbet adja oda, elkerülve a késleltetést (lag).
-        success, frame = cap.read() # ha sikerül a kapcsolódás, akkor elkezdi olvasni a képet
-
-        if success:
-            camera_states[camera_id]['status'] = 'online'
-            camera_states[camera_id]['retries'] = 0
-
-            while True:
-                success, frame = cap.read()
-                if not success:
-                    break
-                
-                # Standardizáljuk a méretet a hibamentes kodekhez
-                if frame.shape[1] != REC_W or frame.shape[0] != REC_H:
-                    frame = cv2.resize(frame, (REC_W, REC_H), interpolation=cv2.INTER_LINEAR)
-
-                # OSD (Feliratok)
-                cam_name = CAMERAS[camera_id]["name"]
-                timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                osd_text = f"{cam_name} | {timestamp_str}"
-                cv2.putText(frame, osd_text, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-                cv2.putText(frame, osd_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                # RAM frissítése az élőképhez
-                ret, buffer = cv2.imencode('.jpg', frame)
-                if ret:
-                    latest_frames[camera_id] = buffer.tobytes()
-
-                # Sorba rakás a rögzítéshez
-                if recording_flags[camera_id]:
-                    try:
-                        write_queues[camera_id].put_nowait(frame.copy())
-                    except queue.Full:
-                        pass 
-
-            cap.release()
-        else:
-            camera_states[camera_id]['status'] = 'offline'
-            camera_states[camera_id]['retries'] += 1
-            latest_frames[camera_id] = NOISE_FRAME
+ 
+        # Első frame-mel teszteljük a kapcsolatot
+        success, _ = cap.read()
+        if not success:
+            camera_states[camera_id]["status"] = "offline"
+            camera_states[camera_id]["retries"] += 1
+            latest_frames[camera_id] = FRAME_OFFLINE
             cap.release()
             time.sleep(0.5)
-
+            continue
+ 
+        camera_states[camera_id]["status"] = "online"
+        camera_states[camera_id]["retries"] = 0
+ 
+        while True:
+            success, frame = cap.read()
+            if not success:
+                break  # Stream megszakadt → kilépés, újracsatlakozás következik
+ 
+            # Egységes felbontásra méretezés (kodek és dual-stream miatt szükséges)
+            if frame.shape[1] != REC_W or frame.shape[0] != REC_H:
+                frame = cv2.resize(frame, (REC_W, REC_H), interpolation=cv2.INTER_LINEAR)
+ 
+            # OSD: kettős szöveg (fekete árnyék + fehér előtér) a kontrasztért
+            ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            osd = f"{cam_name} | {ts}"
+            cv2.putText(frame, osd, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0),       2)
+            cv2.putText(frame, osd, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+ 
+            # Élőkép frissítése RAM-ban
+            ret, buffer = cv2.imencode(".jpg", frame)
+            if ret:
+                latest_frames[camera_id] = buffer.tobytes()
+ 
+            # Felvétel aktív: képkocka átadása a writer_worker-nek
+            if recording_flags[camera_id]:
+                try:
+                    write_queues[camera_id].put_nowait(frame.copy())
+                except queue.Full:
+                    pass  # Inkább kihagyunk egy képkockát, mint hogy blokkoljuk a szálat
+ 
+        cap.release()
+ 
+ 
 # ==========================================
-# 2. SD KÁRTYA ÍRÓ SZÁL (Consumer) - DUPLA STREAM IMAGEIO (H.264)
+# 2. FELVEVŐ SZÁL — Consumer (Dupla stream H.264)
 # ==========================================
+ 
 def writer_worker(camera_id):
-    out_main = None
-    out_sub = None
-
+    out_main = None  # Főstream (640x480)
+    out_sub  = None  # Al-stream (160x120) — gyors tekeréshez a lejátszóban
+ 
     while True:
         try:
-            # Várakozás az új képkockára a memóriából
             frame = write_queues[camera_id].get(timeout=0.5)
-            
-            # 1. Rögzítés indítása
+ 
+            # Felvétel indítása: fájlok megnyitása az első képkocka érkezésekor
             if recording_flags[camera_id] and out_main is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                
-                # Fő adatfolyam (Nagy felbontás - H.264 kódolás)
-                filename_main = f"archivum/cam_{camera_id}_{timestamp}_main.mp4"
-                out_main = imageio.get_writer(filename_main, fps=CALCULATED_FPS, codec='libx264', macro_block_size=16)
-                
-                # Al-adatfolyam (Kicsi felbontás - osztva 2-vel)
-                filename_sub = f"archivum/cam_{camera_id}_{timestamp}_sub.mp4"
-                out_sub = imageio.get_writer(filename_sub, fps=CALCULATED_FPS, codec='libx264', macro_block_size=2)
-                
-                print(f"[REC] Kamera {camera_id}: Dupla mentés IMAGEIO (H.264) indítva")
-
-            # 2. Képkockák írása a fájlokba
+                ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path_main = os.path.join(ARCHIVE_DIR, f"cam_{camera_id}_{ts}_main.mp4")
+                path_sub  = os.path.join(ARCHIVE_DIR, f"cam_{camera_id}_{ts}_sub.mp4")
+ 
+                # macro_block_size=16: H.264 szabvány 16x16 pixeles makroblokkokat használ
+                out_main = imageio.get_writer(path_main, fps=CALCULATED_FPS, codec=H264_CODEC, macro_block_size=16)
+                out_sub  = imageio.get_writer(path_sub,  fps=CALCULATED_FPS, codec=H264_CODEC, macro_block_size=16)
+                print(f"[REC START] Kamera {camera_id}: {path_main}")
+ 
             if out_main is not None:
-                # FONTOS: Az OpenCV BGR-t használ, az imageio RGB-t vár! Megfordítjuk a színeket.
+                # OpenCV BGR-t használ, az imageio RGB-t vár → csatornák felcserélése
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Eredeti nagy kép kiírása
                 out_main.append_data(frame_rgb)
-                
-                # Kép lekicsinyítése a gyors pörgetéshez, majd kiírása (javítva //2-re!)
-                frame_sub = cv2.resize(frame_rgb, (int(REC_W)//4, int(REC_H)//4), interpolation=cv2.INTER_LINEAR)
+ 
+                # Al-stream: negyed felbontás (160x120)
+                frame_sub = cv2.resize(frame_rgb, (REC_W // 4, REC_H // 4), interpolation=cv2.INTER_LINEAR)
                 out_sub.append_data(frame_sub)
-
-        # 3. Rögzítés leállítása
+ 
         except queue.Empty:
+            # Sor üres + felvétel leállítva → fájlok biztonságos lezárása
             if not recording_flags[camera_id] and out_main is not None:
                 out_main.close()
                 out_sub.close()
                 out_main = None
-                out_sub = None
-                print(f"[STOP] Kamera {camera_id}: Dupla mentés lezárva.")
-
-
-#--------------------------
-# --- SZÁLAK ELINDÍTÁSA ---
-#--------------------------
+                out_sub  = None
+                print(f"[REC STOP]  Kamera {camera_id}: fájlok lezárva.")
+ 
+ 
+# ==========================================
+# SZÁLAK INDÍTÁSA
+# ==========================================
+ 
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
+ 
 for cam_id in CAMERAS:
     threading.Thread(target=camera_worker, args=(cam_id,), daemon=True).start()
     threading.Thread(target=writer_worker, args=(cam_id,), daemon=True).start()
-
-
+ 
+ 
 # ==========================================
-# 3. A WEBSZERVER (CONSUMER)
+# 3. WEBSZERVER — Flask route-ok
 # ==========================================
+ 
 def generate_web_stream(camera_id):
+    """MJPEG stream: multipart/x-mixed-replace MIME típussal a böngésző folyamatosan frissíti a képet."""
     while True:
         frame_bytes = latest_frames.get(camera_id)
-        if frame_bytes is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        if frame_bytes:
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
         time.sleep(FRAME_DURATION_MS / 1000)
-
-@app.route('/')
+ 
+ 
+@app.route("/")
 def index():
-    return render_template('index.html', cameras=CAMERAS)
-
-@app.route('/video_feed/<int:camera_id>')
+    return render_template("index.html", cameras=CAMERAS)
+ 
+ 
+@app.route("/video_feed/<int:camera_id>")
 def video_feed(camera_id):
-    return Response(generate_web_stream(camera_id), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-# A kamerák független rögzítési állapota
-recording_flags = {cam_id: False for cam_id in CAMERAS}
-
-@app.route('/toggle_record/<int:camera_id>', methods=['POST'])
+    return Response(generate_web_stream(camera_id),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
+ 
+ 
+@app.route("/toggle_record/<int:camera_id>", methods=["POST"])
 def toggle_record(camera_id):
-    if camera_id in CAMERAS:
-        recording_flags[camera_id] = not recording_flags[camera_id]
-        állapot = "ELINDÍTVA" if recording_flags[camera_id] else "LEÁLLÍTVA"
-        print(f"\n--- Kamera {camera_id} RÖGZÍTÉS: {állapot} ---\n")
-        return jsonify({"camera_id": camera_id, "recording": recording_flags[camera_id]})
-    return jsonify({"error": "Camera not found"}), 404
-
-@app.route('/status')
+    if camera_id not in CAMERAS:
+        return jsonify({"error": "Kamera nem található"}), 404
+    recording_flags[camera_id] = not recording_flags[camera_id]
+    print(f"[REC] Kamera {camera_id}: {'ELINDÍTVA' if recording_flags[camera_id] else 'LEÁLLÍTVA'}")
+    return jsonify({"camera_id": camera_id, "recording": recording_flags[camera_id]})
+ 
+ 
+@app.route("/api/led/<int:camera_id>/<int:state>", methods=["POST"])
+def toggle_led(camera_id, state):
+    """
+    ESP32-CAM flash LED vezérlés.
+    state=1 → bekapcsol (val=255), state=0 → kikapcsol (val=0).
+    Standard ESP32-CAM firmware endpoint: /control?var=flash&val=[0-255]
+    """
+    if camera_id not in CAMERAS:
+        return jsonify({"error": "Kamera nem található"}), 404
+ 
+    led_url = CAMERAS[camera_id].get("led_url")
+    if not led_url:
+        return jsonify({"error": "Ez a kamera nem támogatja az LED vezérlést"}), 400
+ 
+    try:
+        resp = requests.get(f"{led_url}?v={255 if state else 0}", timeout=2)
+        led_states[camera_id] = bool(state)
+        return jsonify({"camera_id": camera_id, "led": bool(state)})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Nem sikerült elérni a kamerát: {e}"}), 503
+ 
+ 
+@app.route("/status")
 def status():
-    return jsonify(camera_states)
-
-@app.route('/api/videos')
+    """Összesített állapot — a frontend 2 másodpercenként lekéri."""
+    payload = {}
+    for cam_id, state in camera_states.items():
+        payload[cam_id] = {
+            **state,
+            "recording": recording_flags[cam_id],
+            "led"      : led_states.get(cam_id, None),
+            "has_led"  : bool(CAMERAS[cam_id].get("led_url")),
+        }
+    return jsonify(payload)
+ 
+ 
+@app.route("/api/videos")
 def list_videos():
-    if not os.path.exists('archivum'):
+    """Archívum videólista — csak _main.mp4 fájlok (a _sub rejtett, de lejátszáskor használt)."""
+    if not os.path.exists(ARCHIVE_DIR):
         return jsonify([])
-    
-    # Keresés átírva _main.mp4-re
-    files = [f for f in os.listdir('archivum') if f.endswith('_main.mp4')]
-    files.sort(reverse=True)
-    
+    files = sorted(
+        (f for f in os.listdir(ARCHIVE_DIR) if f.endswith("_main.mp4")),
+        reverse=True
+    )
     return jsonify(files)
-
-@app.route('/archivum_video/<filename>')
+ 
+ 
+@app.route("/archivum_video/<filename>")
 def serve_video(filename):
-    return send_from_directory('archivum', filename)
-
-@app.route('/api/reset/<int:camera_id>', methods=['POST'])
+    return send_from_directory(ARCHIVE_DIR, filename)
+ 
+ 
+@app.route("/api/reset/<int:camera_id>", methods=["POST"])
 def reset_camera(camera_id):
-    if camera_id in camera_states:
-        # A próbálkozások nullázása újraindítja a csatlakozási folyamatot a worker szálban
-        camera_states[camera_id]['retries'] = 0
-        camera_states[camera_id]['status'] = 'connecting'
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Kamera nem található"}), 404
+    """Retries nullázása → camera_worker automatikusan újracsatlakozik."""
+    if camera_id not in camera_states:
+        return jsonify({"status": "error", "message": "Kamera nem található"}), 404
+    camera_states[camera_id]["retries"] = 0
+    camera_states[camera_id]["status"]  = "connecting"
+    return jsonify({"status": "success"})
 
-
-if __name__ == '__main__':
-    if not os.path.exists('archivum'):
-        os.makedirs('archivum')
-        
-    app.run(host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc', threaded=True)
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False,
+        threaded=True,
+        ssl_context=(
+            "/etc/tailscale-certs/tekerraspberrypi.tail28af7f.ts.net.crt",
+            "/etc/tailscale-certs/tekerraspberrypi.tail28af7f.ts.net.key"
+        )
+    )

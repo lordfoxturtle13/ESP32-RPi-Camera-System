@@ -1,91 +1,249 @@
 <!DOCTYPE html>
 <html lang="hu">
-
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kamera projekt</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css')}}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>ŐRSzem — Kamera Rendszer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
 <body>
-    <div class="sidebar">
-        <h2>Menü</h2>
-        <div class="menu-item" onclick="showLive()">Élő Kép</div>
-        <div class="menu-item" onclick="showArchive()">Archívum</div>
-        <div class="menu-item" onclick="showSettings()">Beállítások</div>
-    </div>
 
-    <div class="main-content">
-        <div class="header-controls">
-            <button class="hamburger-btn" onclick="toggleSidebar()">☰ Menü</button>
+    <!-- ================================================
+         OLDALSÁV (asztali nézet)
+         Mobil nézeten el van rejtve, helyette bottom-nav van.
+    ================================================ -->
+    <aside class="sidebar" id="sidebar">
+
+        <div class="sidebar-brand">
+            <!-- Kamera logo ikon -->
+            <svg class="brand-icon" viewBox="0 0 40 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1.5" y="7" width="30" height="21" rx="4" stroke="currentColor" stroke-width="2"/>
+                <circle cx="16.5" cy="17.5" r="6" stroke="currentColor" stroke-width="2"/>
+                <circle cx="16.5" cy="17.5" r="2.5" fill="currentColor"/>
+                <path d="M31.5 12L38 8v14l-6.5-4" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <rect x="9" y="2" width="10" height="6" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            <span class="brand-name">ŐRSzem</span>
         </div>
 
-        <div id="live-view" style="width: 100%;">
-            <h1 style="text-align: center; color: var(--accent-color); margin-top: 0;">Központi Kamera Rendszer</h1>
+        <nav class="sidebar-nav">
+            <button class="nav-btn active" id="nav-live" onclick="showView('live')">
+                <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" fill="currentColor"/><path d="M10 1v3M10 16v3M1 10h3M16 10h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4.2 4.2l2.1 2.1M13.7 13.7l2.1 2.1M4.2 15.8l2.1-2.1M13.7 6.3l2.1-2.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                Élő Kép
+            </button>
+            <button class="nav-btn" id="nav-archive" onclick="showView('archive')">
+                <svg viewBox="0 0 20 20" fill="none"><rect x="2" y="5" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 9l4 2.5L8 14V9z" fill="currentColor"/><path d="M2 8h16" stroke="currentColor" stroke-width="1.5"/></svg>
+                Archívum
+            </button>
+            <button class="nav-btn" id="nav-settings" onclick="showView('settings')">
+                <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                Beállítások
+            </button>
+        </nav>
 
-            <div class="global-controls">
-                <button id="record-all-btn" class="btn btn-global-record" onclick="toggleAllRecords()">
-                    🔴 Összes Felvétele
-                </button>
+        <!-- Kamera állapot összesítő az oldalsávon -->
+        <div class="sidebar-status">
+            <p class="status-title">Kamerák</p>
+            {% for cam_id, cam in cameras.items() %}
+            <div class="status-row" id="status-row-{{ cam_id }}">
+                <span class="status-dot" id="sidebar-dot-{{ cam_id }}"></span>
+                <span class="status-cam-name">{{ cam.name }}</span>
             </div>
+            {% endfor %}
+        </div>
+
+    </aside>
+
+    <!-- ================================================
+         FŐ TARTALOM
+    ================================================ -->
+    <main class="main-content">
+
+        <!-- Fejléc sáv -->
+        <header class="topbar">
+            <button class="hamburger" onclick="toggleSidebar()" aria-label="Menü">
+                <span></span><span></span><span></span>
+            </button>
+            <h1 class="topbar-title">Kamera Rendszer</h1>
+            <button class="btn-global-rec" id="record-all-btn" onclick="toggleAllRecords()">
+                <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="5"/></svg>
+                Összes Felvétele
+            </button>
+        </header>
+
+        <!-- ============================================
+             ÉLŐKÉP NÉZET
+        ============================================ -->
+        <section id="view-live" class="view">
 
             <div class="camera-grid">
-                {% for camera_id in cameras %}
-                <div class="camera-card">
+                {% for cam_id, cam in cameras.items() %}
+                <div class="camera-card" id="card-{{ cam_id }}">
 
+                    <!-- Kártyafej: kamera neve és vezérlők -->
                     <div class="card-header">
-                        <h3 class="camera-title">Kamera: {{ camera_id }}</h3>
-                        <div class="card-actions">
-                            <button id="record-btn-{{ camera_id }}" class="btn btn-record"
-                                onclick="toggleRecord('{{ camera_id }}')">
-                                ⏺ Felvétel
+                        <div class="cam-info">
+                            <span class="cam-status-dot" id="dot-{{ cam_id }}"></span>
+                            <span class="cam-name">{{ cam.name }}</span>
+                            <span class="cam-id">CAM{{ "%02d"|format(cam_id) }}</span>
+                        </div>
+                        <div class="card-controls">
+                            {% if cam.get("led_url") %}
+                            <!-- LED gomb — csak az ESP32-CAM kamerán jelenik meg -->
+                            <button class="btn-icon btn-led" id="led-btn-{{ cam_id }}"
+                                    onclick="toggleLED({{ cam_id }})" title="Flash LED ki/be">
+                                <svg viewBox="0 0 20 20" fill="none">
+                                    <path d="M10 2L6 11h4v7l4-9h-4V2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                </svg>
                             </button>
-                            <button class="btn btn-reset" onclick="resetCamera('{{ camera_id }}')"
-                                title="Újracsatlakozás">
-                                🔄
+                            {% endif %}
+                            <button class="btn-record" id="record-btn-{{ cam_id }}"
+                                    onclick="toggleRecord({{ cam_id }})">
+                                <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4"/></svg>
+                                Felvétel
+                            </button>
+                            <button class="btn-icon btn-reset" onclick="resetCamera({{ cam_id }})"
+                                    title="Újracsatlakozás">
+                                <svg viewBox="0 0 20 20" fill="none">
+                                    <path d="M4 10a6 6 0 1 0 1-3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    <path d="M4 4v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
                             </button>
                         </div>
                     </div>
 
-                    <div class="feed-container">
-                        <img src="{{ url_for('video_feed', camera_id=camera_id) }}" id="feed-{{ camera_id }}"
-                            class="camera-feed" onclick="toggleFullScreen(this)" alt="Élő stream ({{ camera_id }})">
-                    </div>
+                    <!-- Videó konténer + "no signal" overlay -->
+                    <div class="feed-wrapper" id="feed-wrapper-{{ cam_id }}"
+                         ondblclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
 
+                        <!-- MJPEG stream — a Python folyamatosan táplálja -->
+                        <img class="camera-feed" id="feed-{{ cam_id }}"
+                             src="/video_feed/{{ cam_id }}" alt="{{ cam.name }}">
+
+                        <!-- No-signal overlay — JS mutatja/rejti el a kamera állapota alapján -->
+                        <div class="signal-overlay" id="overlay-{{ cam_id }}">
+                            <!-- Animált kamera ikon -->
+                            <div class="no-signal-icon">
+                                <svg viewBox="0 0 80 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="2" y="14" width="54" height="42" rx="6" stroke="currentColor" stroke-width="2.5"/>
+                                    <circle cx="29" cy="35" r="11" stroke="currentColor" stroke-width="2.5"/>
+                                    <circle cx="29" cy="35" r="5" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M56 24l22-12v36L56 36" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+                                    <rect x="18" y="6" width="18" height="10" rx="3" stroke="currentColor" stroke-width="2"/>
+                                    <!-- Villanó jel a "searching" állapothoz -->
+                                    <circle class="signal-pulse" cx="29" cy="35" r="17" stroke="currentColor" stroke-width="1.5" opacity="0"/>
+                                </svg>
+                            </div>
+                            <p class="overlay-status" id="overlay-text-{{ cam_id }}">KERESÉS...</p>
+                            <button class="overlay-reset-btn" onclick="resetCamera({{ cam_id }})">
+                                Újracsatlakozás
+                            </button>
+                        </div>
+
+                        <!-- Felvételi jelzés a videón (piros pötty + REC szöveg) -->
+                        <div class="rec-indicator" id="rec-indicator-{{ cam_id }}">
+                            <span class="rec-dot"></span> REC
+                        </div>
+
+                    </div>
                 </div>
                 {% endfor %}
             </div>
-        </div>
-        <!-- Itt nézzük a videokat -->
-        <div id="archive-view" class="hidden"
-            style="width: 100%; display: flex; flex-direction: column; gap: 20px; align-items: center;">
-            <h2 style="color: var(--accent-color); margin-top: 0;">Mentett felvételek</h2>
 
-            <div id="video-list" class="video-list-grid"></div>
+        </section>
 
-            <div id="player-container" class="hidden" style="width: 100%; max-width: 1000px; margin: 0 auto; position: relative;">
-                
-                <video id="archive-player-sub" muted
-                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color); position: absolute; top: 0; left: 0; z-index: 1;">
-                </video>
-                
-                <video id="archive-player" controls
-                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color); position: relative; z-index: 2; background-color: #000; transition: opacity 0.1s;">
-                </video>
-                
+        <!-- ============================================
+             ARCHÍVUM NÉZET
+        ============================================ -->
+        <section id="view-archive" class="view hidden">
+
+            <div class="archive-layout">
+
+                <!-- Videólista -->
+                <div class="archive-list-panel">
+                    <h2 class="panel-title">Felvételek</h2>
+                    <div id="video-list" class="video-list">
+                        <p class="empty-msg">Betöltés...</p>
+                    </div>
+                </div>
+
+                <!-- Lejátszó panel -->
+                <div class="archive-player-panel" id="player-panel">
+                    <h2 class="panel-title" id="player-title">Válassz felvételt</h2>
+
+                    <div class="player-wrapper">
+                        <!-- Főstream: nagy felbontás, vezérlőkkel -->
+                        <video id="archive-player" class="main-player" controls preload="none">
+                            Nem támogatott formátum.
+                        </video>
+
+                        <!-- Al-stream: gyors tekerés előnézete (seeking közben látható) -->
+                        <video id="archive-player-sub" class="sub-player" muted preload="none">
+                        </video>
+                    </div>
+
+                    <p class="player-hint">Dupla kattintás → teljes képernyő</p>
+                </div>
+
             </div>
-        </div>
 
-        <div id="settings-view" class="hidden" style="width: 100%; display: flex; flex-direction: column; align-items: center; padding-top: 20px;">
-            <h2 style="color: var(--accent-color); margin-top: 0;">Rendszerbeállítások</h2>
-            
-            <div style="background-color: var(--sidebar-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 30px; text-align: center; max-width: 600px;">
-                <h3 style="margin-top: 0;">🛠️ Fejlesztés alatt</h3>
-                <p style="color: var(--text-color);">Hamarosan: Központi rendszerbeállítások, tárhelykezelés és kamerakonfiguráció (ESP32-CAM felbontás, vaku vezérlés).</p>
+        </section>
+
+        <!-- ============================================
+             BEÁLLÍTÁSOK NÉZET
+        ============================================ -->
+        <section id="view-settings" class="view hidden">
+
+            <div class="settings-layout">
+                <h2 class="panel-title">Rendszer információ</h2>
+
+                <div class="settings-grid">
+                    {% for cam_id, cam in cameras.items() %}
+                    <div class="settings-card">
+                        <div class="settings-cam-header">
+                            <span class="cam-status-dot" id="settings-dot-{{ cam_id }}"></span>
+                            <span class="settings-cam-name">{{ cam.name }}</span>
+                            <span class="cam-id">CAM{{ "%02d"|format(cam_id) }}</span>
+                        </div>
+                        <dl class="settings-info">
+                            <dt>Stream URL</dt>
+                            <dd class="mono">{{ cam.url }}</dd>
+                            {% if cam.get("led_url") %}
+                            <dt>LED vezérlés</dt>
+                            <dd class="mono">{{ cam.led_url }}</dd>
+                            {% endif %}
+                        </dl>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
-        </div>
 
-    </div><script src="{{ url_for('static', filename='script.js') }}"></script>
+        </section>
+
+    </main>
+
+    <!-- ================================================
+         MOBIL BOTTOM NAVIGÁCIÓ
+         Csak kisebb képernyőkön látható (CSS szabályozza).
+    ================================================ -->
+    <nav class="bottom-nav">
+        <button class="bottom-nav-btn active" id="bnav-live" onclick="showView('live')">
+            <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" fill="currentColor"/><path d="M10 1v3M10 16v3M1 10h3M16 10h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Élő
+        </button>
+        <button class="bottom-nav-btn" id="bnav-archive" onclick="showView('archive')">
+            <svg viewBox="0 0 20 20" fill="none"><rect x="2" y="5" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 9l4 2.5L8 14V9z" fill="currentColor"/><path d="M2 8h16" stroke="currentColor" stroke-width="1.5"/></svg>
+            Archívum
+        </button>
+        <button class="bottom-nav-btn" id="bnav-settings" onclick="showView('settings')">
+            <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Beállítások
+        </button>
+    </nav>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
