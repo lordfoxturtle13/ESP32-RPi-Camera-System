@@ -13,7 +13,7 @@
         <h2>Menü</h2>
         <div class="menu-item" onclick="showLive()">Élő Kép</div>
         <div class="menu-item" onclick="showArchive()">Archívum</div>
-        <div class="menu-item">Beállítások</div>
+        <div class="menu-item" onclick="showSettings()">Beállítások</div>
     </div>
 
     <div class="main-content">
@@ -57,16 +57,32 @@
                 {% endfor %}
             </div>
         </div>
-
+        <!-- Itt nézzük a videokat -->
         <div id="archive-view" class="hidden"
             style="width: 100%; display: flex; flex-direction: column; gap: 20px; align-items: center;">
             <h2 style="color: var(--accent-color); margin-top: 0;">Mentett felvételek</h2>
 
             <div id="video-list" class="video-list-grid"></div>
 
-            <div id="player-container" class="hidden" style="width: 100%; max-width: 1000px; margin: 0 auto;">
+            <div id="player-container" class="hidden" style="width: 100%; max-width: 1000px; margin: 0 auto; position: relative;">
+                
+                <video id="archive-player-sub" muted
+                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color); position: absolute; top: 0; left: 0; z-index: 1;">
+                </video>
+                
                 <video id="archive-player" controls
-                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color);"></video>
+                    style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color); position: relative; z-index: 2; background-color: #000; transition: opacity 0.1s;">
+                </video>
+                
+            </div>
+        </div>
+
+        <div id="settings-view" class="hidden" style="width: 100%; display: flex; flex-direction: column; align-items: center; padding-top: 20px;">
+            <h2 style="color: var(--accent-color); margin-top: 0;">Rendszerbeállítások</h2>
+            
+            <div style="background-color: var(--sidebar-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 30px; text-align: center; max-width: 600px;">
+                <h3 style="margin-top: 0;">🛠️ Fejlesztés alatt</h3>
+                <p style="color: var(--text-color);">Hamarosan: Központi rendszerbeállítások, tárhelykezelés és kamerakonfiguráció (ESP32-CAM felbontás, vaku vezérlés).</p>
             </div>
         </div>
 

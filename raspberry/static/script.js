@@ -85,10 +85,11 @@ function toggleFullScreen(element) {
         }
     }
 }
-
+//--------------------------
 function showLive() {
     document.getElementById('live-view').classList.remove('hidden');
     document.getElementById('archive-view').classList.add('hidden');
+    document.getElementById('settings-view').classList.add('hidden'); // Eltünteti a beállításokat
     const player = document.getElementById('archive-player');
     if (player) player.pause();
 }
@@ -96,12 +97,21 @@ function showLive() {
 function showArchive() {
     document.getElementById('live-view').classList.add('hidden');
     document.getElementById('archive-view').classList.remove('hidden');
+    document.getElementById('settings-view').classList.add('hidden'); // Eltünteti a beállításokat
     loadVideoList(); 
 }
 
+// EZ A TELJESEN ÚJ FÜGGVÉNY A GOMBODHOZ
+function showSettings() {
+    document.getElementById('live-view').classList.add('hidden');
+    document.getElementById('archive-view').classList.add('hidden');
+    document.getElementById('settings-view').classList.remove('hidden'); // Megjeleníti a beállításokat
+    const player = document.getElementById('archive-player');
+    if (player) player.pause(); // Ha ment a videó az archívumban, állítsa le
+}
 
 // ==========================================
-// 3. ARCHÍVUM LEJÁTSZÓ (RÉGI, MEGTARTOTT)
+// 3. ARCHÍVUM LEJÁTSZÓ (DUPLA STREAM)
 // ==========================================
 function loadVideoList() {
     fetch('/api/videos')
@@ -118,7 +128,8 @@ function loadVideoList() {
             files.forEach(file => {
                 const btn = document.createElement('button');
                 btn.className = 'video-item-btn';
-                btn.innerText = "🎥 " + file;
+                // A gomb feliratából kivesszük a "_main" szót, hogy szebb legyen
+                btn.innerText = "🎥 " + file.replace('_main.mp4', '');
                 btn.onclick = () => playVideo(file);
                 list.appendChild(btn);
             });
@@ -128,10 +139,43 @@ function loadVideoList() {
 
 function playVideo(filename) {
     document.getElementById('player-container').classList.remove('hidden');
-    const player = document.getElementById('archive-player');
+    
+    const mainPlayer = document.getElementById('archive-player');
+    const subPlayer = document.getElementById('archive-player-sub');
 
-    player.pause();
-    player.innerHTML = `<source src="/archivum_video/${filename}" type="video/${filename.endsWith('.webm') ? 'webm' : 'mp4'}">`;
-    player.load(); 
-    player.play();
+    // Mivel a fájl pl. "cam_0_idő_main.webm", a sub fájl "cam_0_idő_sub.webm" lesz
+    const subFilename = filename.replace('_main.mp4', '_sub.mp4');
+
+    mainPlayer.pause();
+    subPlayer.pause();
+
+    // Mindkét videó betöltése
+    mainPlayer.innerHTML = `<source src="/archivum_video/${filename}" type="video/mp4">`;
+    subPlayer.innerHTML = `<source src="/archivum_video/${subFilename}" type="video/mp4">`;
+
+    mainPlayer.load();
+    subPlayer.load(); 
+    mainPlayer.play();
 }
+
+// === AZ ESEMÉNYVEZÉRELT TEKERÉS LOGIKÁJA ===
+document.addEventListener('DOMContentLoaded', () => {
+    const mainPlayer = document.getElementById('archive-player');
+    const subPlayer = document.getElementById('archive-player-sub');
+
+    if (mainPlayer && subPlayer) {
+        // Amikor elkezded húzni a csúszkát (seeking)
+        mainPlayer.addEventListener('seeking', () => {
+            // A nagy videót átlátszóvá tesszük, de a vezérlői megmaradnak!
+            mainPlayer.style.opacity = '0.01'; 
+            // A háttérben lévő kicsi videó idejét rászinkronizáljuk a tekerőre
+            subPlayer.currentTime = mainPlayer.currentTime;
+        });
+
+        // Amikor elengeded a csúszkát (seeked)
+        mainPlayer.addEventListener('seeked', () => {
+            // Visszahozzuk a nagy videót láthatóra
+            mainPlayer.style.opacity = '1';
+        });
+    }
+});
