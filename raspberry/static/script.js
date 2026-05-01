@@ -395,3 +395,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // Oldal betöltésekor indítjuk el a státusz pollert
     startStatusPolling();
 });
+
+// ================================================
+// ARCHÍVUM — Nyíl billentyűs navigáció
+// ================================================
+
+document.addEventListener('keydown', (e) => {
+    if (currentView !== 'archive') return;
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+
+    const buttons = [...document.querySelectorAll('#video-list .video-item-btn')];
+    if (buttons.length === 0) return;
+
+    e.preventDefault();
+
+    const activeBtn   = document.querySelector('#video-list .video-item-btn.active');
+    const currentIdx  = activeBtn ? buttons.indexOf(activeBtn) : -1;
+    const nextIdx     = e.key === 'ArrowDown'
+        ? Math.min(currentIdx + 1, buttons.length - 1)
+        : Math.max(currentIdx - 1, 0);
+
+    buttons[nextIdx].click();
+    buttons[nextIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
