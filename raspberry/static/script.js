@@ -135,10 +135,9 @@ function toggleAllRecords() {
     const targetState = !isAnyRecording;
 
     // Csak azokat a kamerákat érinti, amik nincsenek a célállapotban
-    document.querySelectorAll('[id^="record-btn-"]').forEach(btn => {
-        const id = Number(btn.id.replace('record-btn-', ''));
+    Object.keys(recordingStates).forEach(id => {
         if (!!recordingStates[id] !== targetState) {
-            toggleRecord(id);
+            toggleRecord(Number(id));
         }
     });
 
@@ -224,22 +223,11 @@ async function resetCamera(cameraId) {
 function showView(viewName) {
     currentView = viewName;
 
-    // Nézetek megjelenítése/elrejtése
     ['live', 'archive', 'settings'].forEach(name => {
-        const section = document.getElementById(`view-${name}`);
-        if (section) section.classList.toggle('hidden', name !== viewName);
-    });
-
-    // Oldalsáv gombok
-    ['live', 'archive', 'settings'].forEach(name => {
-        const btn = document.getElementById(`nav-${name}`);
-        if (btn) btn.classList.toggle('active', name === viewName);
-    });
-
-    // Bottom nav gombok (mobil)
-    ['live', 'archive', 'settings'].forEach(name => {
-        const btn = document.getElementById(`bnav-${name}`);
-        if (btn) btn.classList.toggle('active', name === viewName);
+        const isActive = name === viewName;
+        document.getElementById(`view-${name}`)?.classList.toggle('hidden', !isActive);
+        document.getElementById(`nav-${name}`)?.classList.toggle('active', isActive);
+        document.getElementById(`bnav-${name}`)?.classList.toggle('active', isActive);
     });
 
     // Archívum betöltése, ha arra váltunk

@@ -10,5 +10,6 @@ venv/
 
 # Titkos adatok (Jelszavak!) EZ ELÉG FONTOS
 secrets.h
+raspberry/config.json
 
 archivum/

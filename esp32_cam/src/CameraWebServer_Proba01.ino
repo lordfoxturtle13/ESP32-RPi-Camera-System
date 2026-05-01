@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "esp_camera.h"
 #include <WiFi.h>
+#include "secrets.h"
 
 //
 // WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
@@ -34,17 +35,7 @@
 //#define CAMERA_MODEL_DFRobot_Romeo_ESP32S3 // Has PSRAM
 #include "camera_pins.h"
 
-// ===========================
-// Enter your WiFi credentials
-// ===========================
-//const char *ssid = "UPCBE92278";
-//const char *password = "***REMOVED***";
-//const char *ssid = "TnT-home wifi";
-//const char *password = "***REMOVED***";
-const char *ssid = "TΞKΞR + TØMØŔ";
-const char *password = "***REMOVED***";
-//const char *ssid = "1";
-//const char *password = "88888888";
+// WiFi hitelesítő adatok a secrets.h-ból jönnek (gitignore-ban van)
 
 void startCameraServer();
 void setupLedFlash(int pin);

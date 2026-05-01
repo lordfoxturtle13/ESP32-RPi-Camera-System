@@ -1,0 +1,17 @@
+{
+    "cameras": {
+        "0": {
+            "name"    : "Nappali (ESP32)",
+            "url"     : "rtsp://192.168.1.XX:554/mjpeg/1",
+            "led_url" : "http://192.168.1.XX/flash"
+        },
+        "1": { "name": "Konyha",  "url": "http://192.168.0.XXX:81/stream" },
+        "2": { "name": "Garázs",  "url": "http://192.168.0.XXX:81/stream" },
+        "3": { "name": "Kert",    "url": "http://192.168.0.XXX:81/stream" },
+        "4": { "name": "Bejárat", "url": "http://192.168.0.XXX:81/stream" }
+    },
+    "ssl": {
+        "cert": "/etc/tailscale-certs/HOSTNAME.ts.net.crt",
+        "key" : "/etc/tailscale-certs/HOSTNAME.ts.net.key"
+    }
+}
