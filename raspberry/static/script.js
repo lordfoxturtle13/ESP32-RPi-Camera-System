@@ -14,56 +14,6 @@ let currentView = 'live';
 // Auto-refresh timer a Settings nézethez
 let settingsRefreshTimer = null;
 
-// ================================================
-// SNAPSHOT POLLING — iOS-kompatibilis képfrissítés
-// Minden kamerához 150ms-enként kér egy JPEG képkockát.
-// Így nincs soha véget nem érő HTTP kapcsolat, ami mobilon
-// megakasztja a töltési jelzőt.
-// ================================================
-
-const snapshotTimers  = {};  // setTimeout handle-ök kameránként
-const snapshotLoaders = {};  // Előbetöltő Image objektumok (double-buffer)
-
-function startSnapshotPolling(camId) {
-    stopSnapshotPolling(camId);
-
-    const displayImg = document.getElementById(`feed-${camId}`);
-    if (!displayImg) return;
-
-    if (!snapshotLoaders[camId]) snapshotLoaders[camId] = new Image();
-    const loader = snapshotLoaders[camId];
-
-    function fetchFrame() {
-        loader.src = `/snapshot/${camId}?_=${Date.now()}`;
-    }
-
-    loader.onload = () => {
-        displayImg.src = loader.src;
-        snapshotTimers[camId] = setTimeout(fetchFrame, 150);
-    };
-
-    loader.onerror = () => {
-        snapshotTimers[camId] = setTimeout(fetchFrame, 1000);
-    };
-
-    fetchFrame();
-}
-
-function stopSnapshotPolling(camId) {
-    clearTimeout(snapshotTimers[camId]);
-    delete snapshotTimers[camId];
-}
-
-function startAllSnapshotPolling() {
-    document.querySelectorAll('.camera-feed').forEach(img => {
-        const camId = img.id.replace('feed-', '');
-        if (camId) startSnapshotPolling(Number(camId));
-    });
-}
-
-function stopAllSnapshotPolling() {
-    Object.keys(snapshotTimers).forEach(id => stopSnapshotPolling(id));
-}
 
 // ================================================
 // STÁTUSZ POLLING
@@ -542,35 +492,35 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Oldal betöltésekor indítjuk el a státusz pollert és a snapshot pollinget
+    // Oldal betöltésekor indítjuk el a státusz pollert
     startStatusPolling();
-    startAllSnapshotPolling();
 });
 
 // ================================================
-// OLDAL ÉLETCIKLUS — polling szüneteltetése és újraindítása
+// STREAM ÚJRACSATLAKOZÁS — bfcache és tab-váltás után
 // ================================================
 
-// Bfcache visszatérés vagy új betöltés → polling (újra)indítása
-window.addEventListener('pageshow', () => {
-    startAllSnapshotPolling();
+function reconnectStreams() {
+    document.querySelectorAll('.camera-feed').forEach(img => {
+        const camId = img.id.replace('feed-', '');
+        img.src = `/video_feed/${camId}?_=${Date.now()}`;
+    });
+}
+
+// Bfcache (vissza gombbal visszatérés) esetén a stream meghal — újraindítjuk
+window.addEventListener('pageshow', (e) => {
+    if (e.persisted) reconnectStreams();
 });
 
-// Tab rejtve → polling leáll (akkumulátor/sávszélesség kímélés)
-// Tab előtérben → polling újraindul
+// Tab váltás / minimalizálás után visszatéréskor
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-        startAllSnapshotPolling();
-    } else {
-        stopAllSnapshotPolling();
-    }
+    if (document.visibilityState === 'visible') reconnectStreams();
 });
 
 // Oldal elhagyásakor kilépés naplózása (sendBeacon megbízható, fetch nem)
 // pagehide: iOS Safari-n is megbízható (beforeunload iOS-en nem tüzel)
 window.addEventListener('pagehide', () => {
     navigator.sendBeacon('/api/disconnect');
-    stopAllSnapshotPolling();
 });
 window.addEventListener('beforeunload', () => {
     navigator.sendBeacon('/api/disconnect');
