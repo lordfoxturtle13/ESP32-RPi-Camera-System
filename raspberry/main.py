@@ -1,3 +1,4 @@
+import atexit
 import cv2
 import time
 import json
@@ -8,7 +9,7 @@ import queue
 import os
 import requests
 from datetime import datetime
-from flask import Flask, render_template, Response, jsonify, send_from_directory
+from flask import Flask, render_template, Response, jsonify, send_from_directory, request
 import imageio
 
 app = Flask(__name__)
@@ -58,6 +59,10 @@ led_states = {cam_id: False for cam_id in CAMERAS if CAMERAS[cam_id].get("led_ur
 # Képkocka sor a felvevő szálnak (maxsize=30 gátolja a RAM telítődést lassú írás esetén)
 write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
 
+# Aktív nézők: {ip: utolsó_látott_timestamp} — /status polling alapján frissül
+active_viewers = {}
+VIEWER_TIMEOUT = 10  # másodperc: ennyi ideig számít aktívnak az utoljára látott IP
+
 
 def generate_dark_frame():
     """
@@ -91,6 +96,18 @@ def log_event(camera_id, message):
     except OSError:
         pass
     log.warning(f"[EVENT] {line.strip()}")
+
+
+def log_system_event(message):
+    """Rendszerszintű esemény naplózása (belépés, kilépés) — nincs kamera kontextus."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{ts} | RENDSZER | {message}\n"
+    try:
+        with open(os.path.join(ARCHIVE_DIR, "events.log"), "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+    log.info(f"[SYSTEM] {message}")
 
 
 def camera_worker(camera_id):
@@ -228,15 +245,24 @@ def generate_web_stream(camera_id):
 
 @app.route("/")
 def index():
+    log_system_event(f"[BELÉPÉS] {request.remote_addr} megnyitotta az oldalt")
     return render_template("index.html", cameras=CAMERAS)
+
+
+@app.route("/api/disconnect", methods=["POST"])
+def disconnect():
+    log_system_event(f"[KILÉPÉS] {request.remote_addr} elhagyta az oldalt")
+    return "", 204
 
 
 @app.route("/video_feed/<int:camera_id>")
 def video_feed(camera_id):
     if camera_id not in CAMERAS:
         return jsonify({"error": "Kamera nem található"}), 404
-    return Response(generate_web_stream(camera_id),
+    resp = Response(generate_web_stream(camera_id),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
 
 
 @app.route("/toggle_record/<int:camera_id>", methods=["POST"])
@@ -244,8 +270,11 @@ def toggle_record(camera_id):
     if camera_id not in CAMERAS:
         return jsonify({"error": "Kamera nem található"}), 404
     recording_flags[camera_id] = not recording_flags[camera_id]
-    log.info(f"[REC] Kamera {camera_id}: {'ELINDÍTVA' if recording_flags[camera_id] else 'LEÁLLÍTVA'}")
-    return jsonify({"camera_id": camera_id, "recording": recording_flags[camera_id]})
+    is_recording = recording_flags[camera_id]
+    log.info(f"[REC] Kamera {camera_id}: {'ELINDÍTVA' if is_recording else 'LEÁLLÍTVA'}")
+    action = "elindította" if is_recording else "leállította"
+    log_event(camera_id, f"[FELVÉTEL] {request.remote_addr} {action} a felvételt")
+    return jsonify({"camera_id": camera_id, "recording": is_recording})
 
 
 @app.route("/api/led/<int:camera_id>/<int:state>", methods=["POST"])
@@ -273,6 +302,8 @@ def toggle_led(camera_id, state):
 @app.route("/status")
 def status():
     """Összesített állapot — a frontend 2 másodpercenként lekéri."""
+    active_viewers[request.remote_addr] = time.time()
+
     payload = {}
     for cam_id, state in camera_states.items():
         payload[cam_id] = {
@@ -301,6 +332,25 @@ def serve_video(filename):
     return send_from_directory(ARCHIVE_DIR, filename)
 
 
+@app.route("/api/viewers")
+def list_viewers():
+    """Jelenleg az oldalon lévő IP-k (utolsó 10 mp-ben pingelt /status)."""
+    now = time.time()
+    current = [ip for ip, last in active_viewers.items() if now - last < VIEWER_TIMEOUT]
+    return jsonify(current)
+
+
+@app.route("/api/events")
+def list_events():
+    """Eseménynapló utolsó 200 sora — legújabb először."""
+    log_path = os.path.join(ARCHIVE_DIR, "events.log")
+    if not os.path.exists(log_path):
+        return jsonify([])
+    with open(log_path, encoding="utf-8") as f:
+        lines = [l.rstrip() for l in f if l.strip()]
+    return jsonify(list(reversed(lines[-200:])))
+
+
 @app.route("/api/reset/<int:camera_id>", methods=["POST"])
 def reset_camera(camera_id):
     """Retries nullázása → camera_worker automatikusan újracsatlakozik."""
@@ -311,6 +361,8 @@ def reset_camera(camera_id):
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
+    log_system_event("[SZERVER] Elindult")
+    atexit.register(lambda: log_system_event("[SZERVER] Leállt"))
     app.run(
         host="0.0.0.0",
         port=5000,

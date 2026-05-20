@@ -109,12 +109,12 @@
                     </div>
 
                     <!-- Videó konténer + "no signal" overlay -->
-                    <div class="feed-wrapper" id="feed-wrapper-{{ cam_id }}"
-                         onclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
+                    <div class="feed-wrapper" id="feed-wrapper-{{ cam_id }}">
 
-                        <!-- MJPEG stream — a Python folyamatosan táplálja -->
+                        <!-- MJPEG stream — kattintásra fullscreen -->
                         <img class="camera-feed" id="feed-{{ cam_id }}"
-                             src="/video_feed/{{ cam_id }}" alt="{{ cam.name }}">
+                             src="/video_feed/{{ cam_id }}" alt="{{ cam.name }}"
+                             onclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
 
                         <!-- No-signal overlay — JS mutatja/rejti el a kamera állapota alapján -->
                         <div class="signal-overlay" id="overlay-{{ cam_id }}">
@@ -131,7 +131,7 @@
                                 </svg>
                             </div>
                             <p class="overlay-status" id="overlay-text-{{ cam_id }}">KERESÉS...</p>
-                            <button class="overlay-reset-btn" onclick="resetCamera({{ cam_id }})">
+                            <button class="overlay-reset-btn" onclick="resetCamera({{ cam_id }}); event.stopPropagation()">
                                 Újracsatlakozás
                             </button>
                         </div>
@@ -211,6 +211,36 @@
                         </dl>
                     </div>
                     {% endfor %}
+                </div>
+
+                <div class="events-panel">
+                    <div class="events-header">
+                        <h2 class="panel-title" style="margin:0">Aktív nézők</h2>
+                        <button class="btn-icon" onclick="loadViewers(this)" title="Frissítés">
+                            <svg viewBox="0 0 20 20" fill="none">
+                                <path d="M4 10a6 6 0 1 0 1-3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                <path d="M4 4v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="viewers-list" class="events-list">
+                        <p class="empty-msg">Betöltés...</p>
+                    </div>
+                </div>
+
+                <div class="events-panel">
+                    <div class="events-header">
+                        <h2 class="panel-title" style="margin:0">Eseménynapló</h2>
+                        <button class="btn-icon" onclick="loadEvents(this)" title="Frissítés">
+                            <svg viewBox="0 0 20 20" fill="none">
+                                <path d="M4 10a6 6 0 1 0 1-3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                <path d="M4 4v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="events-list" class="events-list">
+                        <p class="empty-msg">Betöltés...</p>
+                    </div>
                 </div>
             </div>
 

@@ -11,6 +11,9 @@ const ledStates = {};
 // Éppen aktív nézet azonosítója
 let currentView = 'live';
 
+// Auto-refresh timer a Settings nézethez
+let settingsRefreshTimer = null;
+
 // ================================================
 // STÁTUSZ POLLING
 // A /status endpoint 2 másodpercenként lekérdezi az összes kamera állapotát.
@@ -241,6 +244,15 @@ function showView(viewName) {
     // Archívum betöltése, ha arra váltunk
     if (viewName === 'archive') loadVideoList();
 
+    // Eseménynapló + nézők: auto-refresh indítása/leállítása
+    if (viewName === 'settings') {
+        loadViewers();
+        loadEvents();
+        settingsRefreshTimer = setInterval(() => loadViewers(), 5000);
+    } else {
+        clearInterval(settingsRefreshTimer);
+    }
+
     // Lejátszó leállítása, ha elhagyjuk az archívumot
     if (viewName !== 'archive') {
         const player = document.getElementById('archive-player');
@@ -298,12 +310,42 @@ function toggleFullscreen(wrapperId) {
     const el = document.getElementById(wrapperId);
     if (!el) return;
 
+    // Ha már CSS-fullscreen módban van → kilépés
+    if (el.classList.contains('custom-fullscreen')) {
+        el.classList.remove('custom-fullscreen');
+        return;
+    }
+
+    // Natív fullscreen API kísérlet (asztali + Android)
     if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (req) {
+            req.call(el).catch(() => {
+                // iOS Safari: requestFullscreen nem támogatott → CSS fallback
+                el.classList.add('custom-fullscreen');
+            });
+            return;
+        }
+        // Nincs fullscreen API (régi iOS) → CSS fallback
+        el.classList.add('custom-fullscreen');
     } else {
         (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     }
 }
+
+// Natív fullscreen kilépésekor eltávolítjuk a CSS osztályt is (konzisztencia)
+document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) {
+        document.querySelectorAll('.feed-wrapper.custom-fullscreen')
+            .forEach(el => el.classList.remove('custom-fullscreen'));
+    }
+});
+document.addEventListener('webkitfullscreenchange', () => {
+    if (!document.webkitFullscreenElement) {
+        document.querySelectorAll('.feed-wrapper.custom-fullscreen')
+            .forEach(el => el.classList.remove('custom-fullscreen'));
+    }
+});
 
 // ================================================
 // ARCHÍVUM LEJÁTSZÓ
@@ -454,6 +496,36 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ================================================
+// STREAM ÚJRACSATLAKOZÁS — bfcache és tab-váltás után
+// ================================================
+
+function reconnectStreams() {
+    document.querySelectorAll('.camera-feed').forEach(img => {
+        const camId = img.id.replace('feed-', '');
+        img.src = `/video_feed/${camId}?_=${Date.now()}`;
+    });
+}
+
+// Bfcache (vissza gombbal visszatérés) esetén a stream meghal — újraindítjuk
+window.addEventListener('pageshow', (e) => {
+    if (e.persisted) reconnectStreams();
+});
+
+// Tab váltás / minimalizálás után visszatéréskor
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnectStreams();
+});
+
+// Oldal elhagyásakor kilépés naplózása (sendBeacon megbízható, fetch nem)
+// pagehide: iOS Safari-n is megbízható (beforeunload iOS-en nem tüzel)
+window.addEventListener('pagehide', () => {
+    navigator.sendBeacon('/api/disconnect');
+});
+window.addEventListener('beforeunload', () => {
+    navigator.sendBeacon('/api/disconnect');
+});
+
+// ================================================
 // ARCHÍVUM — Nyíl billentyűs navigáció
 // ================================================
 
@@ -476,3 +548,76 @@ document.addEventListener('keydown', (e) => {
     buttons[nextIdx].click();
     buttons[nextIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 });
+
+// ================================================
+// SEGÉDFÜGGVÉNY — Spinner animáció gombokhoz
+// ================================================
+
+function spinBtn(btn) {
+    if (!btn) return;
+    btn.classList.remove('spinning');
+    void btn.offsetWidth; // reflow hogy az animáció újrainduljon
+    btn.classList.add('spinning');
+    btn.addEventListener('animationend', () => btn.classList.remove('spinning'), { once: true });
+}
+
+// ================================================
+// AKTÍV NÉZŐK
+// ================================================
+
+async function loadViewers(btn) {
+    spinBtn(btn);
+    const list = document.getElementById('viewers-list');
+    if (!list) return;
+
+    try {
+        const resp = await fetch('/api/viewers');
+        const ips  = await resp.json();
+
+        if (ips.length === 0) {
+            list.innerHTML = '<p class="empty-msg">Jelenleg senki nem néz.</p>';
+            return;
+        }
+
+        list.innerHTML = ips.map(ip =>
+            `<p class="event-entry event-viewer">${ip}</p>`
+        ).join('');
+
+    } catch (err) {
+        list.innerHTML = '<p class="empty-msg">Hiba a nézők betöltésekor.</p>';
+    }
+}
+
+// ================================================
+// ESEMÉNYNAPLÓ
+// ================================================
+
+async function loadEvents(btn) {
+    spinBtn(btn);
+    const list = document.getElementById('events-list');
+    if (!list) return;
+
+    try {
+        const resp   = await fetch('/api/events');
+        const events = await resp.json();
+
+        if (events.length === 0) {
+            list.innerHTML = '<p class="empty-msg">Nincs naplózott esemény.</p>';
+            return;
+        }
+
+        list.innerHTML = events.map(line => {
+            let cls = '';
+            if (line.includes('megszakadt'))       cls = 'event-disconnect';
+            else if (line.includes('helyreállt'))  cls = 'event-reconnect';
+            else if (line.includes('elindította')) cls = 'event-viewer-on';
+            else if (line.includes('leállította')) cls = 'event-viewer-off';
+            else if (line.includes('[BELÉPÉS]'))   cls = 'event-viewer-on';
+            else if (line.includes('[KILÉPÉS]'))   cls = 'event-viewer-off';
+            return `<p class="event-entry ${cls}">${line}</p>`;
+        }).join('');
+
+    } catch (err) {
+        list.innerHTML = '<p class="empty-msg">Hiba a napló betöltésekor.</p>';
+    }
+}
