@@ -111,9 +111,9 @@
                     <!-- Videó konténer + "no signal" overlay -->
                     <div class="feed-wrapper" id="feed-wrapper-{{ cam_id }}">
 
-                        <!-- MJPEG stream — kattintásra fullscreen -->
+                        <!-- Kamerakép — JS snapshot polling tölti (iOS-kompatibilis) -->
                         <img class="camera-feed" id="feed-{{ cam_id }}"
-                             src="/video_feed/{{ cam_id }}" alt="{{ cam.name }}"
+                             alt="{{ cam.name }}"
                              onclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
 
                         <!-- No-signal overlay — JS mutatja/rejti el a kamera állapota alapján -->

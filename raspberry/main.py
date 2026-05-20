@@ -265,6 +265,17 @@ def video_feed(camera_id):
     return resp
 
 
+@app.route("/snapshot/<int:camera_id>")
+def snapshot(camera_id):
+    """Egyetlen JPEG képkocka — JS-alapú polling-hoz (iOS-kompatibilis)."""
+    if camera_id not in CAMERAS:
+        return jsonify({"error": "Kamera nem található"}), 404
+    frame_bytes = latest_frames.get(camera_id, FRAME_OFFLINE)
+    resp = Response(frame_bytes, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
+
 @app.route("/toggle_record/<int:camera_id>", methods=["POST"])
 def toggle_record(camera_id):
     if camera_id not in CAMERAS:
