@@ -879,10 +879,14 @@ body {
 
 .event-entry:last-child { border-bottom: none; }
 
-.event-disconnect   { color: var(--color-offline); }
-.event-reconnect    { color: var(--color-online); }
-.event-viewer-on    { color: var(--accent-hover); }
-.event-viewer-off   { color: var(--text-muted); }
+.event-server-on    { color: #a78bfa; }          /* lila  — szerver elindult */
+.event-server-off   { color: #6d5a9e; }          /* halvány lila — szerver leállt */
+.event-viewer-on    { color: var(--accent-hover); } /* kék — belépés */
+.event-viewer-off   { color: var(--text-muted); }   /* szürke — kilépés */
+.event-rec-on       { color: #f59e0b; }          /* borostyán — felvétel indult */
+.event-rec-off      { color: #78716c; }          /* szürkésbarna — felvétel leállt */
+.event-disconnect   { color: var(--color-offline); } /* piros — kapcsolat megszakadt */
+.event-reconnect    { color: var(--color-online); }  /* zöld — kapcsolat helyreállt */
 
 .event-viewer { color: var(--accent-hover); }
 

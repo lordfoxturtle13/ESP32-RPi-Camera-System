@@ -609,12 +609,14 @@ async function loadEvents(btn) {
 
         list.innerHTML = events.map(line => {
             let cls = '';
-            if (line.includes('megszakadt'))       cls = 'event-disconnect';
-            else if (line.includes('helyreállt'))  cls = 'event-reconnect';
-            else if (line.includes('elindította')) cls = 'event-viewer-on';
-            else if (line.includes('leállította')) cls = 'event-viewer-off';
-            else if (line.includes('[BELÉPÉS]'))   cls = 'event-viewer-on';
-            else if (line.includes('[KILÉPÉS]'))   cls = 'event-viewer-off';
+            if      (line.includes('[SZERVER] Elindult'))  cls = 'event-server-on';
+            else if (line.includes('[SZERVER] Leállt'))    cls = 'event-server-off';
+            else if (line.includes('[BELÉPÉS]'))           cls = 'event-viewer-on';
+            else if (line.includes('[KILÉPÉS]'))           cls = 'event-viewer-off';
+            else if (line.includes('elindította'))         cls = 'event-rec-on';
+            else if (line.includes('leállította'))         cls = 'event-rec-off';
+            else if (line.includes('megszakadt'))          cls = 'event-disconnect';
+            else if (line.includes('helyreállt'))          cls = 'event-reconnect';
             return `<p class="event-entry ${cls}">${line}</p>`;
         }).join('');
 

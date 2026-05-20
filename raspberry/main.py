@@ -1,4 +1,6 @@
 import atexit
+import signal
+import sys
 import cv2
 import time
 import json
@@ -362,13 +364,21 @@ def reset_camera(camera_id):
     camera_states[camera_id]["status"]  = "connecting"
     return jsonify({"status": "success"})
 
+def _graceful_shutdown(signum, frame):
+    """SIGTERM / SIGINT: tiszta kilépés — a finally blokk logol."""
+    sys.exit(0)
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT,  _graceful_shutdown)
     log_system_event("[SZERVER] Elindult")
-    atexit.register(lambda: log_system_event("[SZERVER] Leállt"))
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False,
-        threaded=True,
-        ssl_context=(_ssl["cert"], _ssl["key"])
-    )
+    try:
+        app.run(
+            host="0.0.0.0",
+            port=5000,
+            debug=False,
+            threaded=True,
+            ssl_context=(_ssl["cert"], _ssl["key"])
+        )
+    finally:
+        log_system_event("[SZERVER] Leállt")
