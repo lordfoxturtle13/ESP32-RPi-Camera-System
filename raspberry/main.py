@@ -15,6 +15,7 @@ from flask import Flask, render_template, Response, jsonify, send_from_directory
 import imageio
 
 app = Flask(__name__)
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # Statikus fájlok (CSS, JS) nem cache-elődnek
 
 logging.basicConfig(
     level=logging.INFO,
