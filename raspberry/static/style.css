@@ -424,6 +424,13 @@ body {
     color       : var(--text-primary);
 }
 
+/* Letiltott állapot (kamera offline) */
+.btn-record.btn-disabled,
+.btn-record:disabled {
+    opacity: 0.35;
+    cursor : not-allowed;
+}
+
 /* Felvétel aktív állapot */
 .btn-record.is-recording {
     background  : rgba(239, 68, 68, 0.15);

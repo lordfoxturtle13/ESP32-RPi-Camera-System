@@ -81,6 +81,18 @@ latest_frames = {cam_id: FRAME_OFFLINE for cam_id in CAMERAS}
 # 1. HÁLÓZATI OLVASÓ SZÁL — Producer
 # ==========================================
 
+def log_event(camera_id, message):
+    """Kamera esemény naplózása az archívum events.log fájlba."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{ts} | Kamera {camera_id} ({CAMERAS[camera_id]['name']}) | {message}\n"
+    try:
+        with open(os.path.join(ARCHIVE_DIR, "events.log"), "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+    log.warning(f"[EVENT] {line.strip()}")
+
+
 def camera_worker(camera_id):
     url      = CAMERAS[camera_id]["url"]
     cam_name = CAMERAS[camera_id]["name"]
@@ -112,6 +124,8 @@ def camera_worker(camera_id):
 
         camera_states[camera_id]["status"] = "online"
         camera_states[camera_id]["retries"] = 0
+        if recording_flags[camera_id]:
+            log_event(camera_id, "Kapcsolat helyreállt — felvétel folytatódik")
 
         while True:
             success, frame = cap.read()
@@ -141,6 +155,8 @@ def camera_worker(camera_id):
                     pass  # Inkább kihagyunk egy képkockát, mint hogy blokkoljuk a szálat
 
         cap.release()
+        if recording_flags[camera_id]:
+            log_event(camera_id, "Kapcsolat megszakadt felvétel közben")
 
 
 # ==========================================

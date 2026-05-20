@@ -68,6 +68,14 @@ function updateCameraUI(camId, state) {
         }
     }
 
+    // --- Felvétel gomb: offline + nem felvesz → letiltva ---
+    const recBtn = document.getElementById(`record-btn-${camId}`);
+    if (recBtn) {
+        const canRecord = (status === 'online') || recording;
+        recBtn.disabled = !canRecord;
+        recBtn.classList.toggle('btn-disabled', !canRecord);
+    }
+
     // --- Felvétel állapot ---
     if (recordingStates[camId] !== recording) {
         recordingStates[camId] = recording;
