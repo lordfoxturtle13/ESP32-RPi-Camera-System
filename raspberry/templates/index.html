@@ -105,19 +105,12 @@
                                 <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4"/></svg>
                                 Felvétel
                             </button>
-                            <button class="btn-icon btn-reset" onclick="resetCamera({{ cam_id }})"
-                                    title="Újracsatlakozás">
-                                <svg viewBox="0 0 20 20" fill="none">
-                                    <path d="M4 10a6 6 0 1 0 1-3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                                    <path d="M4 4v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
                         </div>
                     </div>
 
                     <!-- Videó konténer + "no signal" overlay -->
                     <div class="feed-wrapper" id="feed-wrapper-{{ cam_id }}"
-                         ondblclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
+                         onclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
 
                         <!-- MJPEG stream — a Python folyamatosan táplálja -->
                         <img class="camera-feed" id="feed-{{ cam_id }}"

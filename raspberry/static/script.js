@@ -301,7 +301,23 @@ function toggleFullscreen(wrapperId) {
 // ARCHÍVUM LEJÁTSZÓ
 // ================================================
 
-/** Betölti és megjeleníti az archívum videólistát. */
+const MONTHS = ['január','február','március','április','május','június','július','augusztus','szeptember','október','november','december'];
+
+function parseDateFromFilename(filename) {
+    // cam_0_20260520_171234_main.mp4
+    const parts = filename.split('_');
+    if (parts.length < 5) return null;
+    const d = parts[2], t = parts[3];
+    if (d.length !== 8 || t.length !== 6) return null;
+    return {
+        date     : d,
+        dateLabel: `${d.slice(0,4)}. ${MONTHS[parseInt(d.slice(4,6)) - 1]} ${parseInt(d.slice(6,8))}.`,
+        timeLabel: `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}`,
+        camLabel : `CAM${String(parts[1]).padStart(2, '0')}`,
+    };
+}
+
+/** Betölti és megjeleníti az archívum videólistát, dátum szerint csoportosítva. */
 async function loadVideoList() {
     const list = document.getElementById('video-list');
     if (!list) return;
@@ -319,19 +335,49 @@ async function loadVideoList() {
             return;
         }
 
+        // Dátum szerint csoportosítás (a szerver már visszafele rendezett listát ad)
+        const groups = {};
+        const order  = [];
         files.forEach(filename => {
-            const btn = document.createElement('button');
-            btn.className   = 'video-item-btn';
-            // A "_main.mp4" végzést levágjuk a szebb megjelenítésért
-            btn.textContent = filename.replace('_main.mp4', '').replace(/_/g, ' ');
-            btn.dataset.filename = filename;
-            btn.addEventListener('click', () => {
-                // Aktív kiemelés
-                list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                playVideo(filename);
+            const parsed = parseDateFromFilename(filename);
+            const key    = parsed ? parsed.date : 'egyéb';
+            if (!groups[key]) {
+                groups[key] = { label: parsed ? parsed.dateLabel : 'Egyéb', files: [] };
+                order.push(key);
+            }
+            groups[key].files.push({ filename, parsed });
+        });
+
+        order.forEach(key => {
+            const group = groups[key];
+
+            const header = document.createElement('p');
+            header.className   = 'video-date-header';
+            header.innerHTML   = `<span class="date-arrow">▾</span>${group.label}`;
+
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'video-date-group';
+
+            header.addEventListener('click', () => {
+                const collapsed = groupDiv.classList.toggle('collapsed');
+                header.querySelector('.date-arrow').textContent = collapsed ? '▸' : '▾';
             });
-            list.appendChild(btn);
+
+            list.appendChild(header);
+            list.appendChild(groupDiv);
+
+            group.files.forEach(({ filename, parsed }) => {
+                const btn = document.createElement('button');
+                btn.className        = 'video-item-btn';
+                btn.textContent      = parsed ? `${parsed.camLabel} · ${parsed.timeLabel}` : filename.replace('_main.mp4', '');
+                btn.dataset.filename = filename;
+                btn.addEventListener('click', () => {
+                    list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    playVideo(filename);
+                });
+                groupDiv.appendChild(btn);
+            });
         });
 
     } catch (err) {
@@ -354,7 +400,10 @@ function playVideo(filename) {
     // Al-stream neve: ugyanaz, de _sub.mp4 végzéssel
     const subFilename = filename.replace('_main.mp4', '_sub.mp4');
 
-    if (title) title.textContent = filename.replace('_main.mp4', '').replace(/_/g, ' ');
+    const parsed = parseDateFromFilename(filename);
+    if (title) title.textContent = parsed
+        ? `${parsed.camLabel} — ${parsed.dateLabel} ${parsed.timeLabel}`
+        : filename.replace('_main.mp4', '').replace(/_/g, ' ');
 
     mainPlayer.pause();
     subPlayer.pause();
@@ -404,12 +453,13 @@ document.addEventListener('keydown', (e) => {
     if (currentView !== 'archive') return;
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
 
-    const buttons = [...document.querySelectorAll('#video-list .video-item-btn')];
+    // Csak a látható (nem becsukott) csoportban lévő gombok
+    const buttons = [...document.querySelectorAll('#video-list .video-date-group:not(.collapsed) .video-item-btn')];
     if (buttons.length === 0) return;
 
     e.preventDefault();
 
-    const activeBtn   = document.querySelector('#video-list .video-item-btn.active');
+    const activeBtn   = document.querySelector('#video-list .video-date-group:not(.collapsed) .video-item-btn.active');
     const currentIdx  = activeBtn ? buttons.indexOf(activeBtn) : -1;
     const nextIdx     = e.key === 'ArrowDown'
         ? Math.min(currentIdx + 1, buttons.length - 1)
