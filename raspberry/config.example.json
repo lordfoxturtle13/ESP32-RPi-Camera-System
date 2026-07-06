@@ -15,7 +15,7 @@
         "key" : "/etc/tailscale-certs/HOSTNAME.ts.net.key"
     },
     "auth": {
-        "password"  : "VALTOZD_MEG",
-        "secret_key": "GENERALJ_EGY_VELETLEN_STRINGET"
+        "password_hash": "FUTTASD_A_HASH_SCRIPTET",
+        "secret_key"   : "GENERALJ_EGY_VELETLEN_STRINGET"
     }
 }

@@ -13,6 +13,7 @@ import requests
 from datetime import datetime
 from flask import Flask, render_template, Response, jsonify, send_from_directory, request, session, redirect, url_for
 from functools import wraps
+import bcrypt
 import imageio
 
 app = Flask(__name__)
@@ -271,7 +272,7 @@ def login():
         return redirect(url_for("index"))
     error = None
     if request.method == "POST":
-        if request.form.get("password") == _auth["password"]:
+        if bcrypt.checkpw(request.form.get("password", "").encode(), _auth["password_hash"].encode()):
             session["authenticated"] = True
             session.permanent = True
             return redirect(url_for("index"))
