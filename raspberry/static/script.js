@@ -354,21 +354,33 @@ document.addEventListener('webkitfullscreenchange', () => {
 
 const MONTHS = ['január','február','március','április','május','június','július','augusztus','szeptember','október','november','december'];
 
-function parseDateFromFilename(filename) {
-    // cam_0_20260520_171234_main.mp4
-    const parts = filename.split('_');
-    if (parts.length < 5) return null;
-    const d = parts[2], t = parts[3];
-    if (d.length !== 8 || t.length !== 6) return null;
-    return {
-        date     : d,
-        dateLabel: `${d.slice(0,4)}. ${MONTHS[parseInt(d.slice(4,6)) - 1]} ${parseInt(d.slice(6,8))}.`,
-        timeLabel: `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}`,
-        camLabel : `CAM${String(parts[1]).padStart(2, '0')}`,
-    };
+/** "2026-07-06" → "2026. július 6." */
+function formatDateLabel(dateKey) {
+    const [y, m, d] = dateKey.split('-');
+    return `${y}. ${MONTHS[parseInt(m) - 1]} ${parseInt(d)}.`;
 }
 
-/** Betölti és megjeleníti az archívum videólistát, dátum szerint csoportosítva. */
+/** "cam_0" → "CAM00" */
+function camDirToLabel(camDir) {
+    return `CAM${String(camDir.replace('cam_', '')).padStart(2, '0')}`;
+}
+
+/** "2026-07-06/cam_0/cam_0_20260706_183045_main.mp4" → "18:30:45" */
+function parseTimeFromPath(filepath) {
+    const parts = filepath.split('/').pop().split('_');
+    if (parts.length < 4) return filepath;
+    const t = parts[3];
+    return t.length === 6 ? `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}` : filepath;
+}
+
+function makeCollapsible(header, body) {
+    header.addEventListener('click', () => {
+        const collapsed = body.classList.toggle('collapsed');
+        header.querySelector('.date-arrow').textContent = collapsed ? '▸' : '▾';
+    });
+}
+
+/** Betölti és megjeleníti az archívum videólistát. */
 async function loadVideoList() {
     const list = document.getElementById('video-list');
     if (!list) return;
@@ -376,58 +388,52 @@ async function loadVideoList() {
     list.innerHTML = '<p class="empty-msg">Betöltés...</p>';
 
     try {
-        const resp  = await fetch('/api/videos');
-        const files = await resp.json();
+        const resp = await fetch('/api/videos');
+        const data = await resp.json();
 
         list.innerHTML = '';
 
-        if (files.length === 0) {
+        if (Object.keys(data).length === 0) {
             list.innerHTML = '<p class="empty-msg">Nincsenek mentett felvételek.</p>';
             return;
         }
 
-        // Dátum szerint csoportosítás (a szerver már visszafele rendezett listát ad)
-        const groups = {};
-        const order  = [];
-        files.forEach(filename => {
-            const parsed = parseDateFromFilename(filename);
-            const key    = parsed ? parsed.date : 'egyéb';
-            if (!groups[key]) {
-                groups[key] = { label: parsed ? parsed.dateLabel : 'Egyéb', files: [] };
-                order.push(key);
-            }
-            groups[key].files.push({ filename, parsed });
-        });
+        Object.entries(data).forEach(([dateKey, cameras]) => {
+            const dateHeader = document.createElement('p');
+            dateHeader.className = 'video-date-header';
+            dateHeader.innerHTML = `<span class="date-arrow">▾</span>${formatDateLabel(dateKey)}`;
 
-        order.forEach(key => {
-            const group = groups[key];
+            const dateGroup = document.createElement('div');
+            dateGroup.className = 'video-date-group';
 
-            const header = document.createElement('p');
-            header.className   = 'video-date-header';
-            header.innerHTML   = `<span class="date-arrow">▾</span>${group.label}`;
+            makeCollapsible(dateHeader, dateGroup);
+            list.appendChild(dateHeader);
+            list.appendChild(dateGroup);
 
-            const groupDiv = document.createElement('div');
-            groupDiv.className = 'video-date-group';
+            Object.entries(cameras).forEach(([camDir, files]) => {
+                const camHeader = document.createElement('p');
+                camHeader.className = 'video-cam-header';
+                camHeader.innerHTML = `<span class="date-arrow">▾</span>${camDirToLabel(camDir)}`;
 
-            header.addEventListener('click', () => {
-                const collapsed = groupDiv.classList.toggle('collapsed');
-                header.querySelector('.date-arrow').textContent = collapsed ? '▸' : '▾';
-            });
+                const camGroup = document.createElement('div');
+                camGroup.className = 'video-cam-group';
 
-            list.appendChild(header);
-            list.appendChild(groupDiv);
+                makeCollapsible(camHeader, camGroup);
+                dateGroup.appendChild(camHeader);
+                dateGroup.appendChild(camGroup);
 
-            group.files.forEach(({ filename, parsed }) => {
-                const btn = document.createElement('button');
-                btn.className        = 'video-item-btn';
-                btn.textContent      = parsed ? `${parsed.camLabel} · ${parsed.timeLabel}` : filename.replace('_main.mp4', '');
-                btn.dataset.filename = filename;
-                btn.addEventListener('click', () => {
-                    list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    playVideo(filename);
+                files.forEach(filepath => {
+                    const btn = document.createElement('button');
+                    btn.className = 'video-item-btn';
+                    btn.textContent = parseTimeFromPath(filepath);
+                    btn.dataset.filename = filepath;
+                    btn.addEventListener('click', () => {
+                        list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        playVideo(filepath);
+                    });
+                    camGroup.appendChild(btn);
                 });
-                groupDiv.appendChild(btn);
             });
         });
 
@@ -439,29 +445,25 @@ async function loadVideoList() {
 
 /**
  * Betölt és lejátszik egy archív videót a dupla streames lejátszóban.
- * @param {string} filename - A _main.mp4 fájl neve
+ * @param {string} filepath - Relatív útvonal: "2026-07-06/cam_0/cam_0_..._main.mp4"
  */
-function playVideo(filename) {
+function playVideo(filepath) {
     const mainPlayer = document.getElementById('archive-player');
     const subPlayer  = document.getElementById('archive-player-sub');
     const title      = document.getElementById('player-title');
 
     if (!mainPlayer || !subPlayer) return;
 
-    // Al-stream neve: ugyanaz, de _sub.mp4 végzéssel
-    const subFilename = filename.replace('_main.mp4', '_sub.mp4');
-
-    const parsed = parseDateFromFilename(filename);
-    if (title) title.textContent = parsed
-        ? `${parsed.camLabel} — ${parsed.dateLabel} ${parsed.timeLabel}`
-        : filename.replace('_main.mp4', '').replace(/_/g, ' ');
+    const subFilepath = filepath.replace('_main.mp4', '_sub.mp4');
+    const parts       = filepath.split('/');
+    if (title) title.textContent =
+        `${camDirToLabel(parts[1])} — ${formatDateLabel(parts[0])} ${parseTimeFromPath(filepath)}`;
 
     mainPlayer.pause();
     subPlayer.pause();
 
-    // Forrás beállítása és lejátszás indítása
-    mainPlayer.src = `/archivum_video/${filename}`;
-    subPlayer.src  = `/archivum_video/${subFilename}`;
+    mainPlayer.src = `/archivum_video/${filepath}`;
+    subPlayer.src  = `/archivum_video/${subFilepath}`;
 
     mainPlayer.load();
     subPlayer.load();
@@ -535,12 +537,12 @@ document.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
 
     // Csak a látható (nem becsukott) csoportban lévő gombok
-    const buttons = [...document.querySelectorAll('#video-list .video-date-group:not(.collapsed) .video-item-btn')];
+    const buttons = [...document.querySelectorAll('#video-list .video-cam-group:not(.collapsed) .video-item-btn')];
     if (buttons.length === 0) return;
 
     e.preventDefault();
 
-    const activeBtn   = document.querySelector('#video-list .video-date-group:not(.collapsed) .video-item-btn.active');
+    const activeBtn   = document.querySelector('#video-list .video-cam-group:not(.collapsed) .video-item-btn.active');
     const currentIdx  = activeBtn ? buttons.indexOf(activeBtn) : -1;
     const nextIdx     = e.key === 'ArrowDown'
         ? Math.min(currentIdx + 1, buttons.length - 1)

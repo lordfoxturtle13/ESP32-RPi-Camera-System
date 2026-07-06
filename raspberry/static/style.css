@@ -710,6 +710,32 @@ body {
 
 .video-date-group.collapsed { display: none; }
 
+.video-cam-header {
+    display       : flex;
+    align-items   : center;
+    gap           : 6px;
+    font-size     : 0.7rem;
+    font-weight   : 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color         : var(--text-secondary);
+    padding       : 6px 4px 4px 12px;
+    cursor        : pointer;
+    user-select   : none;
+}
+
+.video-cam-header:hover { color: var(--text-primary); }
+
+.video-cam-group {
+    display       : flex;
+    flex-direction: column;
+    gap           : 4px;
+    padding-left  : 12px;
+    overflow      : hidden;
+}
+
+.video-cam-group.collapsed { display: none; }
+
 .video-item-btn {
     display    : flex;
     align-items: center;

@@ -192,9 +192,12 @@ def writer_worker(camera_id):
 
             # Felvétel indítása: fájlok megnyitása az első képkocka érkezésekor
             if recording_flags[camera_id] and out_main is None:
-                ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
-                path_main = os.path.join(ARCHIVE_DIR, f"cam_{camera_id}_{ts}_main.mp4")
-                path_sub  = os.path.join(ARCHIVE_DIR, f"cam_{camera_id}_{ts}_sub.mp4")
+                now       = datetime.now()
+                ts        = now.strftime("%Y%m%d_%H%M%S")
+                subdir    = os.path.join(ARCHIVE_DIR, now.strftime("%Y-%m-%d"), f"cam_{camera_id}")
+                os.makedirs(subdir, exist_ok=True)
+                path_main = os.path.join(subdir, f"cam_{camera_id}_{ts}_main.mp4")
+                path_sub  = os.path.join(subdir, f"cam_{camera_id}_{ts}_sub.mp4")
 
                 # macro_block_size=16: H.264 szabvány 16x16 pixeles makroblokkokat használ
                 out_main = imageio.get_writer(path_main, fps=CALCULATED_FPS, codec=H264_CODEC, macro_block_size=16)
@@ -321,19 +324,33 @@ def status():
 
 @app.route("/api/videos")
 def list_videos():
-    """Archívum videólista — csak _main.mp4 fájlok (a _sub rejtett, de lejátszáskor használt)."""
+    """Archívum videólista — {dátum: {kamera: [relative_path, ...]}} struktúrában."""
     if not os.path.exists(ARCHIVE_DIR):
-        return jsonify([])
-    files = sorted(
-        (f for f in os.listdir(ARCHIVE_DIR) if f.endswith("_main.mp4")),
-        reverse=True
-    )
-    return jsonify(files)
+        return jsonify({})
+    result = {}
+    for date_dir in sorted(os.listdir(ARCHIVE_DIR), reverse=True):
+        date_path = os.path.join(ARCHIVE_DIR, date_dir)
+        if not os.path.isdir(date_path):
+            continue
+        for cam_dir in sorted(os.listdir(date_path)):
+            cam_path = os.path.join(date_path, cam_dir)
+            if not os.path.isdir(cam_path):
+                continue
+            files = sorted(
+                (f for f in os.listdir(cam_path) if f.endswith("_main.mp4")),
+                reverse=True
+            )
+            if files:
+                result.setdefault(date_dir, {})[cam_dir] = [
+                    f"{date_dir}/{cam_dir}/{f}" for f in files
+                ]
+    return jsonify(result)
 
 
-@app.route("/archivum_video/<filename>")
-def serve_video(filename):
-    return send_from_directory(ARCHIVE_DIR, filename)
+@app.route("/archivum_video/<path:filepath>")
+def serve_video(filepath):
+    directory = os.path.join(ARCHIVE_DIR, os.path.dirname(filepath))
+    return send_from_directory(directory, os.path.basename(filepath))
 
 
 @app.route("/api/viewers")
