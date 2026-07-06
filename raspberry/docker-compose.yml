@@ -1,0 +1,15 @@
+services:
+  kamera-szerver:
+    build: .
+    ports:
+      - "8080:5000"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - archivum:/app/archivum
+    environment:
+      - H264_CODEC=libx264
+      - ARCHIVE_DIR=/app/archivum
+    restart: unless-stopped
+
+volumes:
+  archivum:

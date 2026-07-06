@@ -33,17 +33,16 @@ with open(_config_path, encoding="utf-8") as _f:
     _config = json.load(_f)
 
 CAMERAS   = {int(k): v for k, v in _config["cameras"].items()}
-_ssl      = _config["ssl"]
+_ssl      = _config.get("ssl")
 
 MAX_RETRIES       = 5          # Ennyi sikertelen csatlakozás után áll "standby"-ba a kamera
 REC_W, REC_H      = 640, 480   # Rögzítési felbontás (minden kamera erre standardizálódik)
 FRAME_DURATION_MS = 150        # Webstream képkocka-időköz (150ms ≈ ~6.6 FPS)
 CALCULATED_FPS    = 1000 / FRAME_DURATION_MS
-ARCHIVE_DIR       = os.path.join(os.path.dirname(__file__), "archivum")
+ARCHIVE_DIR       = os.environ.get("ARCHIVE_DIR", os.path.join(os.path.dirname(__file__), "archivum"))
 
-# RPi4 hardveres H.264 enkóder (V4L2 M2M) — kb. 5-10x kevesebb CPU mint szoftveres libx264.
-# Ha PC-n teszteled, írd vissza: "libx264"
-H264_CODEC = "h264_v4l2m2m"
+# RPi4: "h264_v4l2m2m" (hardveres), PC/Docker: "libx264" (szoftveres)
+H264_CODEC = os.environ.get("H264_CODEC", "libx264")
 
 # ==========================================
 # MEGOSZTOTT ÁLLAPOT
@@ -374,12 +373,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  _graceful_shutdown)
     log_system_event("[SZERVER] Elindult")
     try:
+        ssl_context = (_ssl["cert"], _ssl["key"]) if _ssl else None
         app.run(
             host="0.0.0.0",
             port=5000,
             debug=False,
             threaded=True,
-            ssl_context=(_ssl["cert"], _ssl["key"])
+            ssl_context=ssl_context
         )
     finally:
         log_system_event("[SZERVER] Leállt")
