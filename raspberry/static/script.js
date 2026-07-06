@@ -626,3 +626,45 @@ async function loadEvents(btn) {
         list.innerHTML = '<p class="empty-msg">Hiba a napló betöltésekor.</p>';
     }
 }
+
+// ================================================
+// JELSZÓ MÓDOSÍTÁS
+// ================================================
+
+async function changePassword() {
+    const current = document.getElementById('pw-current').value;
+    const newPw   = document.getElementById('pw-new').value;
+    const confirm = document.getElementById('pw-confirm').value;
+    const msg     = document.getElementById('pw-msg');
+
+    msg.className = 'pw-msg';
+
+    if (newPw !== confirm) {
+        msg.textContent = 'A két új jelszó nem egyezik.';
+        msg.classList.add('pw-msg-error');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/change_password', {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify({ current, new: newPw }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            msg.textContent = 'Jelszó sikeresen megváltoztatva.';
+            msg.classList.add('pw-msg-ok');
+            document.getElementById('pw-current').value = '';
+            document.getElementById('pw-new').value     = '';
+            document.getElementById('pw-confirm').value = '';
+        } else {
+            msg.textContent = data.error || 'Hiba történt.';
+            msg.classList.add('pw-msg-error');
+        }
+    } catch (err) {
+        msg.textContent = 'Hálózati hiba.';
+        msg.classList.add('pw-msg-error');
+    }
+}

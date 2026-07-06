@@ -1113,3 +1113,18 @@ body {
     background: var(--color-offline);
     color     : #fff;
 }
+
+.password-form {
+    display       : flex;
+    flex-direction: column;
+    gap           : 8px;
+    margin-top    : 4px;
+}
+
+.pw-msg {
+    font-size: 0.82rem;
+    margin   : 0;
+}
+.pw-msg.hidden      { display: none; }
+.pw-msg-error       { color: var(--color-offline); }
+.pw-msg-ok          { color: var(--color-online); }

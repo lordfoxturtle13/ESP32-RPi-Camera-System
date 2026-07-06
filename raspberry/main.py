@@ -286,6 +286,29 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/api/change_password", methods=["POST"])
+def change_password():
+    data       = request.get_json() or {}
+    current_pw = data.get("current", "")
+    new_pw     = data.get("new", "")
+
+    if not bcrypt.checkpw(current_pw.encode(), _auth["password_hash"].encode()):
+        return jsonify({"error": "Hibás jelenlegi jelszó"}), 400
+    if len(new_pw) < 6:
+        return jsonify({"error": "Az új jelszó legalább 6 karakter legyen"}), 400
+
+    new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt(12)).decode()
+
+    with open(_config_path, encoding="utf-8") as f:
+        config_data = json.load(f)
+    config_data["auth"]["password_hash"] = new_hash
+    with open(_config_path, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=4, ensure_ascii=False)
+
+    _auth["password_hash"] = new_hash
+    return jsonify({"success": True})
+
+
 @app.route("/")
 def index():
     log_system_event(f"[BELÉPÉS] {request.remote_addr} megnyitotta az oldalt")

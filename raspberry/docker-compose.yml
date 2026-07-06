@@ -5,7 +5,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./config.json:/app/config.json:ro
+      - ./config.json:/app/config.json
       - ./archivum:/app/archivum
       - /etc/tailscale-certs:/etc/tailscale-certs:ro
     devices:

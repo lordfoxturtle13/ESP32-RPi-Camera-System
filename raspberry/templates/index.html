@@ -231,6 +231,19 @@
 
                 <div class="events-panel">
                     <div class="events-header">
+                        <h2 class="panel-title" style="margin:0">Jelszó módosítása</h2>
+                    </div>
+                    <div class="password-form">
+                        <input type="password" id="pw-current" placeholder="Jelenlegi jelszó" class="login-input">
+                        <input type="password" id="pw-new"     placeholder="Új jelszó (min. 6 karakter)" class="login-input">
+                        <input type="password" id="pw-confirm" placeholder="Új jelszó mégegyszer" class="login-input">
+                        <p id="pw-msg" class="pw-msg hidden"></p>
+                        <button class="login-btn" onclick="changePassword()">Mentés</button>
+                    </div>
+                </div>
+
+                <div class="events-panel">
+                    <div class="events-header">
                         <h2 class="panel-title" style="margin:0">Kijelentkezés</h2>
                     </div>
                     <form method="POST" action="/logout">
