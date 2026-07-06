@@ -92,7 +92,42 @@ sudo tailscale cert \
   HOSTNAME.ts.net
 ```
 
-### 5. Indítás
+### 5. Cert auto-renewal beállítása
+
+A Tailscale cert 90 napig érvényes. Az alábbi script naponta ellenőrzi és szükség esetén megújítja, majd újraindítja a containert:
+
+```bash
+sudo tee /usr/local/bin/tailscale-cert-renew.sh > /dev/null << 'EOF'
+#!/bin/bash
+HOSTNAME="HOSTNAME.ts.net"
+CERT_DIR="/etc/tailscale-certs"
+COMPOSE_DIR="/home/lordf/ESP32-RPi-Camera-System/raspberry"
+CERT_FILE="$CERT_DIR/$HOSTNAME.crt"
+
+BEFORE=$(stat -c %Y "$CERT_FILE" 2>/dev/null || echo 0)
+
+tailscale cert \
+  --cert-file "$CERT_FILE" \
+  --key-file  "$CERT_DIR/$HOSTNAME.key" \
+  "$HOSTNAME"
+
+AFTER=$(stat -c %Y "$CERT_FILE" 2>/dev/null || echo 0)
+
+if [ "$AFTER" -gt "$BEFORE" ]; then
+  docker compose -f "$COMPOSE_DIR/docker-compose.yml" restart
+fi
+EOF
+sudo chmod +x /usr/local/bin/tailscale-cert-renew.sh
+```
+
+Cron job (minden éjjel 3-kor):
+
+```bash
+echo "0 3 * * * root /usr/local/bin/tailscale-cert-renew.sh >> /var/log/tailscale-cert-renew.log 2>&1" \
+  | sudo tee /etc/cron.d/tailscale-cert-renew
+```
+
+### 6. Indítás
 
 ```bash
 docker compose up -d --build
