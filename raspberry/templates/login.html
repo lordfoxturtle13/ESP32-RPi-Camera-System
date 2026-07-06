@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>ŐRSzem — Bejelentkezés</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+
+    <div class="login-card">
+
+        <div class="login-brand">
+            <svg class="brand-icon" viewBox="0 0 40 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1.5" y="7" width="30" height="21" rx="4" stroke="currentColor" stroke-width="2"/>
+                <circle cx="16.5" cy="17.5" r="6" stroke="currentColor" stroke-width="2"/>
+                <circle cx="16.5" cy="17.5" r="2.5" fill="currentColor"/>
+                <path d="M31.5 12L38 8v14l-6.5-4" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <rect x="9" y="2" width="10" height="6" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            <span class="brand-name">ŐRSzem</span>
+        </div>
+
+        <form method="POST" class="login-form">
+            <input
+                type="password"
+                name="password"
+                placeholder="Jelszó"
+                autofocus
+                autocomplete="current-password"
+                class="login-input {% if error %}login-input-error{% endif %}"
+            >
+            {% if error %}
+            <p class="login-error">{{ error }}</p>
+            {% endif %}
+            <button type="submit" class="login-btn">Belépés</button>
+        </form>
+
+    </div>
+
+</body>
+</html>

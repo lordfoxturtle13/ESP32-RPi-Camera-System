@@ -11,7 +11,8 @@ import queue
 import os
 import requests
 from datetime import datetime
-from flask import Flask, render_template, Response, jsonify, send_from_directory, request
+from flask import Flask, render_template, Response, jsonify, send_from_directory, request, session, redirect, url_for
+from functools import wraps
 import imageio
 
 app = Flask(__name__)
@@ -34,6 +35,9 @@ with open(_config_path, encoding="utf-8") as _f:
 
 CAMERAS   = {int(k): v for k, v in _config["cameras"].items()}
 _ssl      = _config.get("ssl")
+_auth     = _config["auth"]
+
+app.secret_key = _auth["secret_key"]
 
 MAX_RETRIES       = 5          # Ennyi sikertelen csatlakozás után áll "standby"-ba a kamera
 REC_W, REC_H      = 640, 480   # Rögzítési felbontás (minden kamera erre standardizálódik)
@@ -246,6 +250,39 @@ def generate_web_stream(camera_id):
             yield (b"--frame\r\n"
                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
         time.sleep(FRAME_DURATION_MS / 1000)
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in ("login", "logout", "static"):
+        return
+    if not session.get("authenticated"):
+        if (request.path.startswith("/api/")
+                or request.path == "/status"
+                or request.path.startswith("/video_feed/")
+                or request.path.startswith("/archivum_video/")):
+            return jsonify({"error": "unauthorized"}), 401
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        if request.form.get("password") == _auth["password"]:
+            session["authenticated"] = True
+            session.permanent = True
+            return redirect(url_for("index"))
+        error = "Hibás jelszó"
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.route("/")
