@@ -1,15 +1,14 @@
 services:
-  kamera-szerver:
+  camera-server:
     build: .
+    restart: always
     ports:
-      - "8080:5000"
+      - "5000:5000"
     volumes:
       - ./config.json:/app/config.json:ro
-      - archivum:/app/archivum
-    environment:
-      - H264_CODEC=libx264
-      - ARCHIVE_DIR=/app/archivum
-    restart: unless-stopped
-
-volumes:
-  archivum:
+      - ./archivum:/app/archivum
+      - /etc/tailscale-certs:/etc/tailscale-certs:ro
+    devices:
+      - /dev/video10:/dev/video10
+      - /dev/video11:/dev/video11
+      - /dev/video12:/dev/video12
