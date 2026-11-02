@@ -506,6 +506,39 @@ body {
     line-height: 0; /* Megszünteti az img alatti extra teret */
 }
 
+.camera-pager {
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    gap            : 12px;
+    margin-top     : 16px;
+}
+
+.camera-pager.hidden,
+.camera-card.hidden { display: none; }
+
+.pager-label {
+    font-family: var(--font-mono);
+    font-size  : 0.85rem;
+    color      : var(--text-secondary);
+}
+
+.pager-btn {
+    padding      : 8px 14px;
+    background   : var(--bg-surface);
+    border       : 1px solid var(--border-strong);
+    border-radius: 8px;
+    color        : var(--text-primary);
+    font-family  : var(--font-ui);
+    font-size    : 0.85rem;
+    cursor       : pointer;
+}
+
+.pager-btn:disabled {
+    opacity: 0.4;
+    cursor : default;
+}
+
 .camera-feed {
     width     : 100%;
     height    : auto;
@@ -857,6 +890,52 @@ body {
 }
 
 .settings-info dd { color: var(--text-secondary); }
+
+.cam-settings-form {
+    display              : grid;
+    grid-template-columns: 1fr 1fr;
+    gap                  : 10px 12px;
+    margin-top           : 14px;
+    padding-top          : 14px;
+    border-top           : 1px solid var(--border-subtle);
+}
+
+.cam-settings-field {
+    display       : flex;
+    flex-direction: column;
+    gap           : 4px;
+    min-width     : 0;
+    font-size     : 0.82rem;
+    font-weight   : 500;
+    color         : var(--text-muted);
+}
+
+.cam-settings-field .login-input { width: 100%; }
+
+.cam-add-form {
+    margin-top : 0;
+    padding-top: 0;
+    border-top : none;
+}
+
+.cam-delete-btn {
+    padding      : 10px;
+    background   : transparent;
+    border       : 1px solid var(--color-offline);
+    border-radius: 8px;
+    color        : var(--color-offline);
+    font-family  : var(--font-ui);
+    font-size    : 0.85rem;
+    font-weight  : 600;
+    cursor       : pointer;
+}
+
+.cam-delete-btn:hover { background: rgba(239, 68, 68, 0.12); }
+
+.cam-settings-wide,
+.cam-settings-form .cam-delete-btn,
+.cam-settings-form .login-btn,
+.cam-settings-form .pw-msg { grid-column: 1 / -1; }
 
 .mono {
     font-family : var(--font-mono);

@@ -9,7 +9,7 @@ Több kamerás megfigyelőrendszer ESP32-CAM modulokkal és Raspberry Pi szerver
 
 ## Funkciók
 
-- Élő MJPEG stream legfeljebb 5 kamerától
+- Élő MJPEG stream tetszőleges számú kamerától (a határ a gép teljesítménye és a sávszélesség)
 - H.264 felvétel hardveres encoderrel (RPi V4L2) — dupla stream (640×480 főstream + 160×120 al-stream gyors tekeréshez)
 - Flash LED vezérlés ESP32-CAM kamerákon
 - Kamera állapotjelzés (online / offline / standby) automatikus újracsatlakozással
@@ -33,15 +33,20 @@ ESP32-RPi-Camera-System/
     ├── config.json         # Kamera config (gitignore-ban!)
     ├── config.example.json # Sablon
     ├── Dockerfile
-    ├── docker-compose.yml
+    ├── docker-compose.yml     # Gépfüggetlen alapbeállítás
+    ├── docker-compose.pi.yml  # Raspberry Pi kiegészítés
     ├── requirements.txt
     ├── templates/
     └── static/
 ```
 
-## Telepítés (Raspberry Pi)
+## Telepítés
+
+Bármilyen gépen futtatható, ahol van Docker. A Raspberry Pi-re vonatkozó lépéseket külön jelöljük.
 
 ### 1. Docker telepítése
+
+Windowson és macOS-en a Docker Desktopot telepítsd. Linuxon és Raspberry Pi-n:
 
 ```bash
 curl -fsSL https://get.docker.com | sh
@@ -73,14 +78,73 @@ Szerkeszd a `config.json`-t a valós kamera adatokkal:
             "led_url" : "http://192.168.1.XX/flash"
         }
     },
-    "ssl": {
-        "cert": "/etc/tailscale-certs/HOSTNAME.ts.net.crt",
-        "key" : "/etc/tailscale-certs/HOSTNAME.ts.net.key"
+    "auth": {
+        "password_hash": "A_JELSZO_HASH_ERTEKE",
+        "secret_key"   : "HOSSZU_VELETLEN_SZOVEG"
     }
 }
 ```
 
-### 4. Tailscale HTTPS cert
+A jelszó hash értékét a `hash_password.py` állítja elő:
+
+```bash
+docker compose run --rm camera-server python hash_password.py
+```
+
+A `secret_key` értéke legyen hosszú, véletlen szöveg, például ennek a parancsnak a kimenete:
+
+```bash
+docker compose run --rm camera-server python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Új kamera a webes felület **Beállítások** oldalán is hozzáadható névvel, típussal (ESP32-CAM, Luckfox) és IP-címmel, vagy egyéb kameránál a teljes stream URL-lel. A kamera neve és címe ugyanitt módosítható, a kamera pedig törölhető is (a felvételei az archívumban maradnak). Ezek újraindítás nélkül életbe lépnek, és a `config.json`-ba mentődnek.
+
+Az Élő Kép oldal oldalanként 4 kamerát mutat, mert a böngésző egy címhez csak kb. 6 kapcsolatot tart nyitva.
+
+A `width`, `height`, `fps` és `rotation` mezők kameránként opcionálisak, alapértelmezésük 640×480, 6,67 FPS és 0°. A `rotation` értéke 0, 90, 180 vagy 270 lehet (az óramutató járásával megegyezően); 90° és 270° esetén a kép álló lesz, a szélesség és a magasság felcserélődik. A webes felület **Beállítások** oldalán is módosíthatók: a változás újraindítás nélkül életbe lép, és a `config.json`-ba mentődik. Választható felbontások: 320×240, 640×480, 800×600, 1280×720, 1920×1080; az FPS 1 és 30 között lehet. Ha felvétel közben változik a beállítás, a felvétel új fájlban folytatódik.
+
+### 4. Indítás
+
+```bash
+docker compose up -d --build
+```
+
+A szerver biztonsági okból alapból csak a saját gépről érhető el: `http://localhost:5000`. A felvételek a `felvetelek` mappába kerülnek, más mappához állítsd be az `ARCHIVE_PATH` változót a `.env` fájlban.
+
+### 5. Távoli elérés HTTPS-sel (Tailscale)
+
+A Tailscale admin felületén, a DNS oldalon kapcsold be a **HTTPS Certificates** opciót, majd futtasd ezt a szervert futtató gépen:
+
+```bash
+tailscale serve --bg 5000
+```
+
+A parancs kiírja a gép saját címét (`https://GEPNEV.TAILNET.ts.net`), a projektben semmit nem kell átírni hozzá. A tanúsítványt a Tailscale kezeli és újítja meg, a szerver pedig csak a Tailscale-hálózatodról érhető el. Kikapcsolás: `tailscale serve --https=443 off`.
+
+### Elérés Tailscale nélkül
+
+Ha nem használsz Tailscale-t, de a helyi hálózatról is el akarod érni a szervert, add hozzá a `.env` fájlhoz az alábbi sorokat. Ilyenkor a forgalom titkosítatlan, ezért csak megbízható hálózaton használd.
+
+```bash
+BIND_ADDRESS=0.0.0.0
+TRUST_PROXY=0
+```
+
+## Raspberry Pi kiegészítés
+
+### 1. Pi-s beállítások bekapcsolása
+
+Az alábbi sor után a sima `docker compose` parancsok a Pi-s kiegészítést is használják: a felvételek az `archivum` mappába kerülnek, és csatolódnak a tanúsítványok és a videóeszközök.
+
+```bash
+echo "COMPOSE_FILE=docker-compose.yml:docker-compose.pi.yml" > .env
+```
+
+A kódoló alapból itt is szoftveres (`libx264`). A hardveres kódolóhoz add hozzá a `.env` fájlhoz a `H264_CODEC=h264_v4l2m2m` sort, és próbáld ki egy felvétellel.
+
+### 2. Tailscale HTTPS cert
+
+A Pi-n is a fenti `tailscale serve` a legegyszerűbb, ilyenkor ez és a következő két lépés kihagyható. Az alábbi lépések ahhoz kellenek, ha a szerver maga kezeli a tanúsítványt.
 
 ```bash
 sudo mkdir -p /etc/tailscale-certs
@@ -92,7 +156,7 @@ sudo tailscale cert \
   HOSTNAME.ts.net
 ```
 
-### 5. Cert auto-renewal beállítása
+### 3. Cert auto-renewal beállítása
 
 A Tailscale cert 90 napig érvényes. Az alábbi script naponta ellenőrzi és szükség esetén megújítja, majd újraindítja a containert:
 
@@ -114,7 +178,7 @@ tailscale cert \
 AFTER=$(stat -c %Y "$CERT_FILE" 2>/dev/null || echo 0)
 
 if [ "$AFTER" -gt "$BEFORE" ]; then
-  docker compose -f "$COMPOSE_DIR/docker-compose.yml" restart
+  cd "$COMPOSE_DIR" && docker compose restart
 fi
 EOF
 sudo chmod +x /usr/local/bin/tailscale-cert-renew.sh
@@ -127,7 +191,16 @@ echo "0 3 * * * root /usr/local/bin/tailscale-cert-renew.sh >> /var/log/tailscal
   | sudo tee /etc/cron.d/tailscale-cert-renew
 ```
 
-### 6. Indítás
+### 4. HTTPS bekapcsolása és indítás
+
+A szervernek ehhez közvetlenül elérhetőnek kell lennie, ezért add hozzá a `.env` fájlhoz a `BIND_ADDRESS=0.0.0.0` és a `TRUST_PROXY=0` sort. Ezután add hozzá a `config.json`-hoz a tanúsítványok helyét:
+
+```json
+"ssl": {
+    "cert": "/etc/tailscale-certs/HOSTNAME.ts.net.crt",
+    "key" : "/etc/tailscale-certs/HOSTNAME.ts.net.key"
+}
+```
 
 ```bash
 docker compose up -d --build

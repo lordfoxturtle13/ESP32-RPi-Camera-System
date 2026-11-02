@@ -242,6 +242,8 @@ function showView(viewName) {
         document.getElementById(`bnav-${name}`)?.classList.toggle('active', isActive);
     });
 
+    updateStreams();
+
     // Archívum betöltése, ha arra váltunk
     if (viewName === 'archive') loadVideoList();
 
@@ -502,12 +504,56 @@ document.addEventListener('DOMContentLoaded', () => {
 // STREAM ÚJRACSATLAKOZÁS — bfcache és tab-váltás után
 // ================================================
 
-function reconnectStreams() {
-    document.querySelectorAll('.camera-feed').forEach(img => {
-        const camId = img.id.replace('feed-', '');
-        img.src = `/video_feed/${camId}?_=${Date.now()}`;
+// A böngésző címenként kb. 6 kapcsolatot tart nyitva, és minden élőkép folyamatosan foglal egyet.
+// Ha ezek elfogynak, a többi kérés (állapot, beállítások) is megáll, ezért egyszerre legfeljebb
+// ennyi élőkép fut. A többi kamera lapozással érhető el.
+const LIVE_PAGE_SIZE = 4;
+let livePage = 0;
+
+/** Csak a látható kamerák streamje fut: más nézetben és háttérbe került lapon nem. */
+function updateStreams() {
+    const active = currentView === 'live' && document.visibilityState === 'visible';
+
+    document.querySelectorAll('.camera-card').forEach(card => {
+        const img = card.querySelector('.camera-feed');
+        const wanted = active && !card.classList.contains('hidden');
+
+        if (wanted && !img.hasAttribute('src')) {
+            img.src = `/video_feed/${img.dataset.camId}?_=${Date.now()}`;
+        } else if (!wanted && img.hasAttribute('src')) {
+            img.removeAttribute('src');
+        }
     });
 }
+
+function renderLivePage() {
+    const cards = document.querySelectorAll('.camera-card');
+    const pages = Math.max(1, Math.ceil(cards.length / LIVE_PAGE_SIZE));
+    livePage = Math.min(Math.max(livePage, 0), pages - 1);
+
+    cards.forEach((card, index) => {
+        card.classList.toggle('hidden', Math.floor(index / LIVE_PAGE_SIZE) !== livePage);
+    });
+
+    document.getElementById('camera-pager').classList.toggle('hidden', pages <= 1);
+    document.getElementById('pager-label').textContent = `${livePage + 1} / ${pages}`;
+    document.getElementById('pager-prev').disabled = livePage === 0;
+    document.getElementById('pager-next').disabled = livePage === pages - 1;
+
+    updateStreams();
+}
+
+function changeLivePage(delta) {
+    livePage += delta;
+    renderLivePage();
+}
+
+function reconnectStreams() {
+    document.querySelectorAll('.camera-feed').forEach(img => img.removeAttribute('src'));
+    updateStreams();
+}
+
+document.addEventListener('DOMContentLoaded', renderLivePage);
 
 // Bfcache (vissza gombbal visszatérés) esetén a stream meghal — újraindítjuk
 window.addEventListener('pageshow', (e) => {
@@ -517,6 +563,7 @@ window.addEventListener('pageshow', (e) => {
 // Tab váltás / minimalizálás után visszatéréskor
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') reconnectStreams();
+    else updateStreams();
 });
 
 // Oldal elhagyásakor kilépés naplózása (sendBeacon megbízható, fetch nem)
@@ -624,6 +671,114 @@ async function loadEvents(btn) {
 
     } catch (err) {
         list.innerHTML = '<p class="empty-msg">Hiba a napló betöltésekor.</p>';
+    }
+}
+
+// ================================================
+// KAMERA KÉP-BEÁLLÍTÁSOK (FELBONTÁS, FPS)
+// ================================================
+
+async function saveCameraSettings(event, cameraId) {
+    event.preventDefault();
+
+    const [width, height] = document.getElementById(`cam-res-${cameraId}`).value.split('x').map(Number);
+    const fps  = Number(document.getElementById(`cam-fps-${cameraId}`).value);
+    const name = document.getElementById(`cam-name-${cameraId}`).value;
+    const url  = document.getElementById(`cam-url-${cameraId}`).value;
+    const led_url = document.getElementById(`cam-led-${cameraId}`).value;
+    const rotation = Number(document.getElementById(`cam-rot-${cameraId}`).value);
+    const msg  = document.getElementById(`cam-msg-${cameraId}`);
+
+    msg.className = 'pw-msg';
+
+    try {
+        const resp = await fetch(`/api/camera_settings/${cameraId}`, {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify({ name, url, led_url, width, height, fps, rotation }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            // A LED gombot a szerver rendereli, ezért ilyenkor újratöltjük az oldalt
+            if (data.led_changed) {
+                location.reload();
+                return;
+            }
+            document.querySelectorAll(`[data-cam-name="${cameraId}"]`).forEach(el => {
+                el.textContent = data.name;
+            });
+            msg.textContent = 'Mentve, a beállítás életbe lépett.';
+            msg.classList.add('pw-msg-ok');
+        } else {
+            msg.textContent = data.error || 'Hiba történt.';
+            msg.classList.add('pw-msg-error');
+        }
+    } catch (err) {
+        msg.textContent = 'Hálózati hiba.';
+        msg.classList.add('pw-msg-error');
+    }
+}
+
+async function deleteCamera(cameraId) {
+    const name = document.getElementById(`cam-name-${cameraId}`).value;
+    if (!confirm(`Biztosan törlöd ezt a kamerát: ${name}? A felvételei az archívumban maradnak.`)) return;
+
+    const msg = document.getElementById(`cam-msg-${cameraId}`);
+    msg.className = 'pw-msg';
+
+    try {
+        const resp = await fetch(`/api/cameras/${cameraId}`, { method: 'DELETE' });
+        const data = await resp.json();
+
+        if (data.success) {
+            location.reload();
+        } else {
+            msg.textContent = data.error || 'Hiba történt.';
+            msg.classList.add('pw-msg-error');
+        }
+    } catch (err) {
+        msg.textContent = 'Hálózati hiba.';
+        msg.classList.add('pw-msg-error');
+    }
+}
+
+/** Egyéb típusnál teljes URL kell, a többinél elég az IP-cím. */
+function updateNewCameraAddress() {
+    const isCustom = document.getElementById('new-cam-type').value === 'custom';
+    document.getElementById('new-cam-address-label').textContent = isCustom ? 'Stream URL' : 'IP-cím';
+    document.getElementById('new-cam-address').placeholder =
+        isCustom ? 'rtsp://192.168.1.100/stream' : '192.168.1.100';
+}
+
+async function addCamera(event) {
+    event.preventDefault();
+
+    const msg = document.getElementById('new-cam-msg');
+    msg.className = 'pw-msg';
+
+    try {
+        const resp = await fetch('/api/cameras', {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify({
+                name   : document.getElementById('new-cam-name').value,
+                type   : document.getElementById('new-cam-type').value,
+                address: document.getElementById('new-cam-address').value,
+            }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            // Az új kamera kártyáit a szerver rendereli, ezért újratöltjük az oldalt
+            location.reload();
+        } else {
+            msg.textContent = data.error || 'Hiba történt.';
+            msg.classList.add('pw-msg-error');
+        }
+    } catch (err) {
+        msg.textContent = 'Hálózati hiba.';
+        msg.classList.add('pw-msg-error');
     }
 }
 

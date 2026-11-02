@@ -51,7 +51,7 @@
             {% for cam_id, cam in cameras.items() %}
             <div class="status-row" id="status-row-{{ cam_id }}">
                 <span class="cam-status-dot" id="sidebar-dot-{{ cam_id }}"></span>
-                <span class="status-cam-name">{{ cam.name }}</span>
+                <span class="status-cam-name" data-cam-name="{{ cam_id }}">{{ cam.name }}</span>
             </div>
             {% endfor %}
         </div>
@@ -88,7 +88,7 @@
                     <div class="card-header">
                         <div class="cam-info">
                             <span class="cam-status-dot" id="dot-{{ cam_id }}"></span>
-                            <span class="cam-name">{{ cam.name }}</span>
+                            <span class="cam-name" data-cam-name="{{ cam_id }}">{{ cam.name }}</span>
                             <span class="cam-id">CAM{{ "%02d"|format(cam_id) }}</span>
                         </div>
                         <div class="card-controls">
@@ -114,7 +114,7 @@
 
                         <!-- MJPEG stream — kattintásra fullscreen -->
                         <img class="camera-feed" id="feed-{{ cam_id }}"
-                             src="/video_feed/{{ cam_id }}" alt="{{ cam.name }}"
+                             data-cam-id="{{ cam_id }}" alt="{{ cam.name }}"
                              onclick="toggleFullscreen('feed-wrapper-{{ cam_id }}')">
 
                         <!-- No-signal overlay — JS mutatja/rejti el a kamera állapota alapján -->
@@ -144,7 +144,16 @@
 
                     </div>
                 </div>
+                {% else %}
+                <p class="empty-msg">Nincs még kamera. A Beállítások oldalon adhatsz hozzá.</p>
                 {% endfor %}
+            </div>
+
+            <!-- Lapozó: csak akkor látszik, ha több kamera van, mint amennyi egy oldalra fér -->
+            <div class="camera-pager hidden" id="camera-pager">
+                <button type="button" class="pager-btn" id="pager-prev" onclick="changeLivePage(-1)">‹ Előző</button>
+                <span class="pager-label" id="pager-label"></span>
+                <button type="button" class="pager-btn" id="pager-next" onclick="changeLivePage(1)">Következő ›</button>
             </div>
 
         </section>
@@ -199,19 +208,83 @@
                     <div class="settings-card">
                         <div class="settings-cam-header">
                             <span class="cam-status-dot" id="settings-dot-{{ cam_id }}"></span>
-                            <span class="settings-cam-name">{{ cam.name }}</span>
+                            <span class="settings-cam-name" data-cam-name="{{ cam_id }}">{{ cam.name }}</span>
                             <span class="cam-id">CAM{{ "%02d"|format(cam_id) }}</span>
                         </div>
-                        <dl class="settings-info">
-                            <dt>Stream URL</dt>
-                            <dd class="mono">{{ cam.url }}</dd>
-                            {% if cam.get("led_url") %}
-                            <dt>LED vezérlés</dt>
-                            <dd class="mono">{{ cam.led_url }}</dd>
-                            {% endif %}
-                        </dl>
+                        {% set current = camera_settings[cam_id] %}
+                        <form class="cam-settings-form" onsubmit="saveCameraSettings(event, {{ cam_id }})">
+                            <label class="cam-settings-field cam-settings-wide">
+                                <span>Név</span>
+                                <input type="text" id="cam-name-{{ cam_id }}" class="login-input"
+                                       maxlength="{{ max_name_length }}" value="{{ cam.name }}" required>
+                            </label>
+                            <label class="cam-settings-field cam-settings-wide">
+                                <span>Stream URL</span>
+                                <input type="text" id="cam-url-{{ cam_id }}" class="login-input mono"
+                                       value="{{ cam.url }}" required>
+                            </label>
+                            <label class="cam-settings-field cam-settings-wide">
+                                <span>LED URL (ha nincs LED, hagyd üresen)</span>
+                                <input type="text" id="cam-led-{{ cam_id }}" class="login-input mono"
+                                       value="{{ cam.get('led_url', '') }}">
+                            </label>
+                            <label class="cam-settings-field">
+                                <span>Felbontás</span>
+                                <select id="cam-res-{{ cam_id }}" class="login-input">
+                                    {% for width, height in resolutions %}
+                                    <option value="{{ width }}x{{ height }}"
+                                            {% if width == current.width and height == current.height %}selected{% endif %}>
+                                        {{ width }}×{{ height }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </label>
+                            <label class="cam-settings-field">
+                                <span>FPS</span>
+                                <input type="number" id="cam-fps-{{ cam_id }}" class="login-input"
+                                       min="{{ min_fps }}" max="{{ max_fps }}" step="any" value="{{ current.fps }}" required>
+                            </label>
+                            <label class="cam-settings-field cam-settings-wide">
+                                <span>Forgatás (óramutató járásával)</span>
+                                <select id="cam-rot-{{ cam_id }}" class="login-input">
+                                    {% for rotation in rotations %}
+                                    <option value="{{ rotation }}" {% if rotation == current.rotation %}selected{% endif %}>{{ rotation }}°</option>
+                                    {% endfor %}
+                                </select>
+                            </label>
+                            <button type="submit" class="login-btn">Mentés</button>
+                            <button type="button" class="cam-delete-btn" onclick="deleteCamera({{ cam_id }})">Kamera törlése</button>
+                            <p id="cam-msg-{{ cam_id }}" class="pw-msg hidden"></p>
+                        </form>
                     </div>
                     {% endfor %}
+                    <div class="settings-card">
+                        <div class="settings-cam-header">
+                            <span class="settings-cam-name">Új kamera hozzáadása</span>
+                        </div>
+                        <form class="cam-settings-form cam-add-form" onsubmit="addCamera(event)">
+                            <label class="cam-settings-field cam-settings-wide">
+                                <span>Név</span>
+                                <input type="text" id="new-cam-name" class="login-input"
+                                       maxlength="{{ max_name_length }}" required>
+                            </label>
+                            <label class="cam-settings-field">
+                                <span>Típus</span>
+                                <select id="new-cam-type" class="login-input" onchange="updateNewCameraAddress()">
+                                    <option value="esp32">ESP32-CAM</option>
+                                    <option value="luckfox">Luckfox</option>
+                                    <option value="custom">Egyéb (teljes URL)</option>
+                                </select>
+                            </label>
+                            <label class="cam-settings-field">
+                                <span id="new-cam-address-label">IP-cím</span>
+                                <input type="text" id="new-cam-address" class="login-input"
+                                       placeholder="192.168.1.100" required>
+                            </label>
+                            <button type="submit" class="login-btn">Hozzáadás</button>
+                            <p id="new-cam-msg" class="pw-msg hidden"></p>
+                        </form>
+                    </div>
                 </div>
 
                 <div class="events-panel">
@@ -235,7 +308,7 @@
                     </div>
                     <div class="password-form">
                         <input type="password" id="pw-current" placeholder="Jelenlegi jelszó" class="login-input">
-                        <input type="password" id="pw-new"     placeholder="Új jelszó (min. 6 karakter)" class="login-input">
+                        <input type="password" id="pw-new"     placeholder="Új jelszó (min. 12 karakter)" class="login-input">
                         <input type="password" id="pw-confirm" placeholder="Új jelszó mégegyszer" class="login-input">
                         <p id="pw-msg" class="pw-msg hidden"></p>
                         <button class="login-btn" onclick="changePassword()">Mentés</button>

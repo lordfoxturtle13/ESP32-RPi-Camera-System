@@ -13,3 +13,5 @@ secrets.h
 raspberry/config.json
 
 archivum/
+raspberry/felvetelek/
+raspberry/.env

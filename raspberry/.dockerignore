@@ -3,3 +3,5 @@ archivum/
 config.json
 __pycache__/
 *.pyc
+felvetelek/
+.env

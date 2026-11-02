@@ -1,14 +1,19 @@
+# Gépfüggetlen alapbeállítás: bármilyen gépen fut, ahol van Docker.
+# Raspberry Pi-n ezt egészíti ki a docker-compose.pi.yml (lásd README).
 services:
   camera-server:
     build: .
     restart: always
     ports:
-      - "5000:5000"
+      # Alapból csak a saját gépről érhető el, a külső elérést a tailscale serve adja
+      - "${BIND_ADDRESS:-127.0.0.1}:5000:5000"
+    environment:
+      # A konténeren belül minden címen figyel, a tényleges korlát a fenti port beállítás
+      - HOST=0.0.0.0
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      # Szoftveres kódoló, mindenhol működik. Raspberry Pi-n hardveres: h264_v4l2m2m
+      - H264_CODEC=${H264_CODEC:-libx264}
     volumes:
       - ./config.json:/app/config.json
-      - ./archivum:/app/archivum
-      - /etc/tailscale-certs:/etc/tailscale-certs:ro
-    devices:
-      - /dev/video10:/dev/video10
-      - /dev/video11:/dev/video11
-      - /dev/video12:/dev/video12
+      # A felvételek helye az ARCHIVE_PATH változóval módosítható
+      - ${ARCHIVE_PATH:-./felvetelek}:/app/archivum
