@@ -76,6 +76,31 @@ class AccessTests(ApiTestCase):
             self.assertEqual(getattr(anonymous, method)(url).status_code, 401, url)
 
 
+class LiveStreamLimitTests(ApiTestCase):
+    def test_limit_keeps_threads_for_the_rest_of_the_site(self):
+        self.assertLess(main.MAX_LIVE_STREAMS, main.SERVER_THREADS)
+
+    def test_streams_over_the_limit_are_refused_and_closing_frees_a_slot(self):
+        streams = [self.client.get("/video_feed/0", buffered=False) for _ in range(main.MAX_LIVE_STREAMS)]
+        try:
+            self.assertTrue(all(stream.status_code == 200 for stream in streams))
+            self.assertEqual(self.client.get("/video_feed/0", buffered=False).status_code, 503)
+            self.assertEqual(self.client.get("/api/videos").status_code, 200)
+            streams.pop().close()
+            streams.append(self.client.get("/video_feed/0", buffered=False))
+            self.assertEqual(streams[-1].status_code, 200)
+        finally:
+            for stream in streams:
+                stream.close()
+
+    def test_stream_ends_when_the_server_stops(self):
+        self.addCleanup(main.server_stopping.clear)
+        stream = main.generate_web_stream(0)
+        self.assertIn(b"--frame", next(stream))
+        main.server_stopping.set()
+        self.assertEqual(list(stream), [])
+
+
 class ListTests(ApiTestCase):
     def test_filters_and_pagination(self):
         add_recording("2026-10-30", camera=0)

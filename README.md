@@ -32,7 +32,7 @@ ESP32-RPi-Camera-System/
 │       ├── secrets.h       # WiFi adatok (gitignore-ban!)
 │       └── ...
 └── raspberry/              # Raspberry Pi szerver
-    ├── main.py             # Flask szerver
+    ├── main.py             # Flask alkalmazás, Waitress szerverrel
     ├── storage.py          # Felvételek listázása, védelme és automatikus törlése
     ├── tests/              # Automatikus tesztek
     ├── config.json         # Kamera config (gitignore-ban!)
@@ -184,7 +184,7 @@ Ezért Pi 3-on a Luckfoxhoz a `live/1` streamet és alacsony FPS-t állíts be, 
 
 ### 2. Tailscale HTTPS cert
 
-A Pi-n is a fenti `tailscale serve` a legegyszerűbb, ilyenkor ez és a következő két lépés kihagyható. Az alábbi lépések ahhoz kellenek, ha a szerver maga kezeli a tanúsítványt.
+A Pi-n is a fenti `tailscale serve` a legegyszerűbb, ilyenkor ez és a következő két lépés kihagyható. Az alábbi lépések ahhoz kellenek, ha a szerver maga kezeli a tanúsítványt. A Waitress nem kezel HTTPS-t, ezért ebben a módban a Flask beépített szervere fut, ami nem éles használatra készült.
 
 ```bash
 sudo mkdir -p /etc/tailscale-certs

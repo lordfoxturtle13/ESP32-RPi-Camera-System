@@ -23,6 +23,7 @@ from flask import Flask, abort, render_template, Response, jsonify, send_from_di
 from functools import wraps
 import bcrypt
 import imageio
+from waitress import serve
 
 import storage
 
@@ -117,6 +118,17 @@ MAX_VIDEOS_PER_PAGE      = 200
 ARCHIVE_MARKER_FILE      = ".orszem-archive"
 REQUIRE_ARCHIVE_MARKER   = os.environ.get("REQUIRE_ARCHIVE_MARKER", "0") == "1"
 SHUTDOWN_WAIT_S          = 8        # A docker stop 10 mp után kényszerrel leállít
+SERVER_PORT              = 5000
+# Minden megnyitott élőkép végig lefoglal egy szálat. A korlát miatt a felület többi kérésének
+# mindig marad szabad szál, különben sok megnyitott élőkép mellett az egész oldal megállna.
+SERVER_THREADS           = 24
+MAX_LIVE_STREAMS         = 20
+# A Waitress alapból gyűjti a kis válaszokat, az élőkép képkockáit viszont azonnal ki kell küldeni
+SERVER_SEND_BYTES        = 1
+# A Waitress a kimeneti puffert csak ennél a méretnél cseréli újra, addig a már elküldött adat is
+# a memóriában marad. Az alapérték (16 MB) streamenként kb. 12 MB RAM-ot és lassú kliensnél akár
+# több másodperc késést okozna az élőképben. A videófájlokat ez nem érinti, azok nem ide kerülnek.
+SERVER_OUTBUF_HIGH_WATERMARK = 1024 * 1024
 
 # Sikertelen jelszópróbák IP-címenként: {ip: {"fails", "locked_until", "last"}}
 # Csak a memóriában él, újraindításkor törlődik.
@@ -298,6 +310,9 @@ FRAME_OFFLINE = generate_dark_frame()
 # Élőkép RAM-puffer: camera_worker szálak ide írják a legfrissebb JPEG-et,
 # a webszerver innen olvassa ki. Python GIL védi a dict-hozzáférést.
 latest_frames = {cam_id: FRAME_OFFLINE for cam_id in CAMERAS}
+live_stream_slots = threading.BoundedSemaphore(MAX_LIVE_STREAMS)
+# Leálláskor az élőképek is befejeződnek, különben a Waitress a szálaikra várna
+server_stopping = threading.Event()
 
 
 # ==========================================
@@ -669,12 +684,12 @@ threading.Thread(target=storage_worker, daemon=True).start()
 
 def generate_web_stream(camera_id):
     """MJPEG stream: multipart/x-mixed-replace MIME típussal a böngésző folyamatosan frissíti a képet."""
-    while camera_id in CAMERAS:  # Törölt kamera streamje véget ér
+    while camera_id in CAMERAS and not server_stopping.is_set():  # Törölt kamera streamje véget ér
         frame_bytes = latest_frames.get(camera_id)
         if frame_bytes:
             yield (b"--frame\r\n"
                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-        time.sleep(1 / camera_settings[camera_id]["fps"])
+        server_stopping.wait(1 / camera_settings[camera_id]["fps"])
 
 
 @app.before_request
@@ -776,8 +791,11 @@ def disconnect():
 def video_feed(camera_id):
     if camera_id not in CAMERAS:
         return jsonify({"error": "Kamera nem található"}), 404
+    if not live_stream_slots.acquire(blocking=False):
+        return jsonify({"error": "Túl sok megnyitott élőkép"}), 503
     resp = Response(generate_web_stream(camera_id),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
+    resp.call_on_close(live_stream_slots.release)
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
@@ -1171,6 +1189,7 @@ def reset_camera(camera_id):
 
 def _graceful_shutdown(signum, frame):
     """SIGTERM / SIGINT: a készülő felvételek lezárása, majd tiszta kilépés — a finally blokk logol."""
+    server_stopping.set()
     # Lezárás nélkül az MP4 fájlnak nem készül el az indexe, és nem lehetne lejátszani
     for camera_id in list(recording_flags):
         recording_flags[camera_id] = False
@@ -1186,13 +1205,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  _graceful_shutdown)
     log_system_event("[SZERVER] Elindult")
     try:
-        ssl_context = (_ssl["cert"], _ssl["key"]) if _ssl else None
-        app.run(
-            host=HOST,
-            port=5000,
-            debug=False,
-            threaded=True,
-            ssl_context=ssl_context
-        )
+        if _ssl:
+            # A Waitress nem kezel HTTPS-t, ezért a saját tanúsítványos módban a Flask szervere fut
+            app.run(host=HOST, port=SERVER_PORT, debug=False, threaded=True,
+                    ssl_context=(_ssl["cert"], _ssl["key"]))
+        else:
+            # A proxy fejléceit a Waitress alapból eldobná, a megbízhatóságukról a ProxyFix dönt
+            serve(app, host=HOST, port=SERVER_PORT, threads=SERVER_THREADS, send_bytes=SERVER_SEND_BYTES,
+                  outbuf_high_watermark=SERVER_OUTBUF_HIGH_WATERMARK, clear_untrusted_proxy_headers=False)
     finally:
         log_system_event("[SZERVER] Leállt")
