@@ -321,13 +321,28 @@ def camera_worker(camera_id, stop):
             log_event(camera_id, "Kapcsolat helyreállt — felvétel folytatódik")
 
         # Törléskor vagy címváltáskor kilépünk, utóbbi esetben az új címre csatlakozunk
+        next_frame = 0
         while not stop.is_set() and camera["url"] == url:
-            success, frame = cap.read()
-            if not success:
+            # A streamet mindig a kamera ütemében olvassuk, különben lemaradnánk tőle, és a kép
+            # lassítva, egyre nagyobb késéssel érkezne. Csak a beállított FPS-nek
+            # megfelelő képkockákat dolgozzuk fel, a többit eldobjuk.
+            if not cap.grab():
                 break  # Stream megszakadt → kilépés, újracsatlakozás következik
 
+            settings = camera_settings[camera_id]
+            interval = 1 / settings["fps"]
+            now      = time.monotonic()
+            # A fél intervallum tűrés kell, hogy a kamera FPS-ével azonos beállításnál az
+            # időzítés ingadozása miatt ne maradjon ki minden második képkocka
+            if now < next_frame - interval / 2:
+                continue
+            next_frame = max(next_frame + interval, now)
+
+            success, frame = cap.retrieve()
+            if not success:
+                break
+
             # Egységes felbontásra méretezés (kodek és dual-stream miatt szükséges)
-            settings      = camera_settings[camera_id]
             width, height = settings["width"], settings["height"]
             if frame.shape[1] != width or frame.shape[0] != height:
                 frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)

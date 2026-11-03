@@ -12,7 +12,7 @@ Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver 
 ## Funkciók
 
 - Élő MJPEG stream tetszőleges számú kamerától (a határ a gép teljesítménye és a sávszélesség)
-- H.264 felvétel, alapból szoftveres kódolóval (`libx264`), Raspberry Pi-n bekapcsolható hardveres kódolóval (V4L2) — dupla stream (főstream + 160×120 al-stream gyors tekeréshez)
+- H.264 felvétel szoftveres kódolóval (`libx264`) — dupla stream (főstream + negyed felbontású al-stream gyors tekeréshez)
 - Flash LED vezérlés ESP32-CAM kamerákon
 - Kamera állapotjelzés (online / offline / standby) automatikus újracsatlakozással
 - Eseménynapló (belépések, kilépések, felvételek, kapcsolatmegszakadások)
@@ -142,7 +142,17 @@ Az alábbi sor után a sima `docker compose` parancsok a Pi-s kiegészítést is
 echo "COMPOSE_FILE=docker-compose.yml:docker-compose.pi.yml" > .env
 ```
 
-A kódoló alapból itt is szoftveres (`libx264`). A hardveres kódolóhoz add hozzá a `.env` fájlhoz a `H264_CODEC=h264_v4l2m2m` sort, és próbáld ki egy felvétellel.
+A kódoló itt is szoftveres (`libx264`). A hardveres `h264_v4l2m2m` kódolót ne használd: Raspberry Pi 3 B+-on kipróbálva lejátszhatatlan fájlokat készített.
+
+### Teljesítmény
+
+A kamerák dekódolása és a szoftveres kódolás is a processzort terheli. Raspberry Pi 3 B+-on (906 MB RAM) ezt mértük:
+
+- A szerver csak a beállított FPS-nek megfelelő képkockákat dolgozza fel. Így a Luckfox kisebb streamje (`live/1`, 704×576, HEVC, 5 FPS) és az ESP32-CAM (6,67 FPS) együtt, felvétel nélkül kb. 80%-ra terheli a processzort a négy mag 400%-ából.
+- Ezzel a beállítással a két kamera egyidejű felvétele valós sebességgel rögzít (stopperrel ellenőrizve).
+- A dekódolás a stream felbontásától függ: a Luckfox fő streamje (`live/0`, 2304×1296, HEVC) a javítás előtti mérésben jóval nagyobb terhelést adott, mint a `live/1`.
+
+Ezért Pi 3-on a Luckfoxhoz a `live/1` streamet és alacsony FPS-t állíts be, több kamerához pedig erősebb gépet használj.
 
 ### 2. Tailscale HTTPS cert
 
