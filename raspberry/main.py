@@ -96,6 +96,11 @@ ARCHIVE_DIR       = os.environ.get("ARCHIVE_DIR", os.path.join(os.path.dirname(_
 # Szoftveres kódoló: minden gépen működik. A hardveres h264_v4l2m2m Pi 3 B+-on hibás fájlokat készített.
 H264_CODEC = os.environ.get("H264_CODEC", "libx264")
 
+# Kulcsképek távolsága másodpercben: tekeréskor a lejátszó a legközelebbi kulcsképtől dekódol.
+# Az al-stream a gyors tekeréshez készül, ezért abban sűrűbbek.
+KEYFRAME_INTERVAL_MAIN_S = 2
+KEYFRAME_INTERVAL_SUB_S  = 1
+
 # Sikertelen jelszópróbák IP-címenként: {ip: {"fails", "locked_until", "last"}}
 # Csak a memóriában él, újraindításkor törlődik.
 _login_attempts = {}
@@ -392,6 +397,15 @@ def camera_worker(camera_id, stop):
 # 2. FELVEVŐ SZÁL — Consumer (Dupla stream H.264)
 # ==========================================
 
+def open_recording_writer(path, fps, keyframe_interval_s):
+    # macro_block_size=16: H.264 szabvány 16x16 pixeles makroblokkokat használ
+    # +faststart: az index a fájl elejére kerül, így a böngésző a lejátszáshoz nem a végéről kéri le
+    return imageio.get_writer(
+        path, fps=fps, codec=H264_CODEC, macro_block_size=16,
+        output_params=["-g", str(max(1, round(fps * keyframe_interval_s))), "-movflags", "+faststart"],
+    )
+
+
 def writer_worker(camera_id, stop):
     out_main = None  # Főstream (640x480)
     out_sub  = None  # Al-stream (negyed felbontás) — gyors tekeréshez a lejátszóban
@@ -420,9 +434,8 @@ def writer_worker(camera_id, stop):
                 path_main = os.path.join(subdir, f"cam_{camera_id}_{ts}_main.mp4")
                 path_sub  = os.path.join(subdir, f"cam_{camera_id}_{ts}_sub.mp4")
 
-                # macro_block_size=16: H.264 szabvány 16x16 pixeles makroblokkokat használ
-                out_main = imageio.get_writer(path_main, fps=fps, codec=H264_CODEC, macro_block_size=16)
-                out_sub  = imageio.get_writer(path_sub,  fps=fps, codec=H264_CODEC, macro_block_size=16)
+                out_main = open_recording_writer(path_main, fps, KEYFRAME_INTERVAL_MAIN_S)
+                out_sub  = open_recording_writer(path_sub, fps, KEYFRAME_INTERVAL_SUB_S)
                 log.info(f"[REC START] Kamera {camera_id}: {path_main} ({width}x{height}, {fps} FPS)")
                 open_params    = (width, height, fps, rotation)
                 rec_start      = time.monotonic()
