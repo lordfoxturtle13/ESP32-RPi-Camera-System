@@ -1207,3 +1207,85 @@ body {
 .pw-msg.hidden      { display: none; }
 .pw-msg-error       { color: var(--color-offline); }
 .pw-msg-ok          { color: var(--color-online); }
+/* ================================================
+   TÁRHELYKEZELÉS
+================================================ */
+
+.storage-alert {
+    padding      : 10px 16px;
+    background   : rgba(239, 68, 68, 0.12);
+    border-bottom: 1px solid var(--color-offline);
+    color        : var(--color-offline);
+    font-size    : 0.88rem;
+    font-weight  : 600;
+}
+
+.storage-alert.hidden { display: none; }
+
+.storage-summary { margin-bottom: 12px; }
+
+.storage-meter {
+    height       : 6px;
+    border-radius: 3px;
+    background   : var(--border-subtle);
+    overflow     : hidden;
+}
+
+.storage-meter-used {
+    height    : 100%;
+    width     : 0;
+    background: var(--accent);
+}
+
+.storage-summary-text,
+.storage-note {
+    margin-top : 6px;
+    color      : var(--text-secondary);
+    font-size  : 0.78rem;
+    line-height: 1.4;
+}
+
+.video-filters {
+    display              : grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap                  : 8px;
+    margin-bottom        : 12px;
+}
+
+.video-row {
+    display    : flex;
+    align-items: stretch;
+    gap        : 4px;
+}
+
+.video-row .video-item-btn {
+    flex     : 1;
+    min-width: 0;
+}
+
+.video-item-btn:disabled { cursor: default; opacity: 0.6; }
+
+.video-action-btn {
+    flex         : none;
+    padding      : 0 8px;
+    background   : transparent;
+    border       : 1px solid var(--border-subtle);
+    border-radius: 7px;
+    color        : var(--text-secondary);
+    font-family  : var(--font-ui);
+    font-size    : 0.72rem;
+    cursor       : pointer;
+}
+
+.video-action-btn:hover:not(:disabled) { border-color: var(--accent); }
+.video-action-btn:disabled { cursor: default; opacity: 0.35; }
+
+.video-action-btn.is-protected {
+    border-color: var(--accent);
+    color       : var(--accent);
+}
+
+.video-delete-btn:hover:not(:disabled) {
+    border-color: var(--color-offline);
+    color       : var(--color-offline);
+}

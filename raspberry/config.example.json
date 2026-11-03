@@ -13,6 +13,11 @@
         "3": { "name": "Kert",    "url": "http://192.168.0.XXX:81/stream" },
         "4": { "name": "Bejárat", "url": "http://192.168.0.XXX:81/stream" }
     },
+    "storage": {
+        "retention_days"  : 30,
+        "min_free_percent": 10,
+        "segment_minutes" : 15
+    },
     "auth": {
         "password_hash": "FUTTASD_A_HASH_SCRIPTET",
         "secret_key"   : "GENERALJ_EGY_VELETLEN_STRINGET"

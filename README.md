@@ -15,7 +15,8 @@ Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver 
 - H.264 felvétel szoftveres kódolóval (`libx264`) — dupla stream (főstream + negyed felbontású al-stream gyors tekeréshez)
 - Flash LED vezérlés ESP32-CAM kamerákon
 - Kamera állapotjelzés (online / offline / standby) automatikus újracsatlakozással
-- Eseménynapló (belépések, kilépések, felvételek, kapcsolatmegszakadások)
+- Eseménynapló (belépések, kilépések, felvételek, törlések, kapcsolatmegszakadások), méretkorláttal
+- Tárhelykezelés: felvételek darabolása, automatikus törlés, védett felvételek, szűrés és lapozás
 - Aktív nézők listája
 - Reszponzív UI — asztali és mobil nézettel
 - Tailscale HTTPS — biztonságos távoli elérés VPN-en át
@@ -32,6 +33,8 @@ ESP32-RPi-Camera-System/
 │       └── ...
 └── raspberry/              # Raspberry Pi szerver
     ├── main.py             # Flask szerver
+    ├── storage.py          # Felvételek listázása, védelme és automatikus törlése
+    ├── tests/              # Automatikus tesztek
     ├── config.json         # Kamera config (gitignore-ban!)
     ├── config.example.json # Sablon
     ├── Dockerfile
@@ -132,6 +135,25 @@ BIND_ADDRESS=0.0.0.0
 TRUST_PROXY=0
 ```
 
+## Tárhelykezelés
+
+A beállítások a webes felület **Beállítások** oldalán módosíthatók, és a `config.json` `storage` részébe mentődnek:
+
+| Beállítás | Alapérték | Jelentés |
+|---|---|---|
+| Megőrzés | 30 nap | Az ennél régebbi felvételek automatikusan törlődnek (0: nincs korlát) |
+| Minimális szabad hely | 10% | Ez alatt a legrégebbi felvételektől kezdve törlődnek a felvételek (0: nincs korlát) |
+| Darabolás | 15 perc | Ilyen hosszú fájlokra bomlik a felvétel. Áramszünetnél legfeljebb az utolsó darab veszik el |
+
+- **Az ellenőrzés** percenként és minden felvétel indításakor lefut. Minden törlés bekerül az eseménynaplóba.
+- **Védett felvétel:** az Archívum oldalon jelölhető meg. Nem törlődik sem automatikusan, sem kézzel, amíg a védelmet le nem veszed. A lista a tároló `protected.json` fájljában van.
+- **Első indítás:** ha még nincs `protected.json`, minden meglévő felvétel védett lesz, így az automatikus törlés csak az ezután készült felvételeket érinti.
+- **Régi fájlok:** a rendszer csak a `ÉÉÉÉ-HH-NN/cam_N/` mappákban lévő felvételeket kezeli. Az archívum gyökerében lévő régebbi videókat nem listázza és nem törli.
+- **Kevés hely:** ha a törlés után sincs elég szabad hely, a felvétel leáll, és a felületen figyelmeztetés jelenik meg. Ugyanez történik írási hibánál is.
+- **Közös lemez:** a szabad hely a teljes lemezre vonatkozik. Ha a felvételek olyan lemezen vannak, amelyet más adat is foglal, a szabály az összes nem védett felvételt törölheti, ezért ilyenkor állítsd 0-ra, vagy használj külön tárolót.
+
+Az eseménynapló 5 MB-nál új fájlt kezd, az előző `events.log.1` néven marad meg.
+
 ## Raspberry Pi kiegészítés
 
 ### 1. Pi-s beállítások bekapcsolása
@@ -140,6 +162,12 @@ Az alábbi sor után a sima `docker compose` parancsok a Pi-s kiegészítést is
 
 ```bash
 echo "COMPOSE_FILE=docker-compose.yml:docker-compose.pi.yml" > .env
+```
+
+A Pi-s beállítás csak akkor rögzít, ha a felvételek tárolóján ott van egy jelölőfájl. Így kihúzott USB esetén nem a rendszerkártya telik meg. Az USB csatlakoztatása után egyszer hozd létre:
+
+```bash
+touch archivum/.orszem-archive
 ```
 
 A kódoló itt is szoftveres (`libx264`). A hardveres `h264_v4l2m2m` kódoló nincs támogatva: Raspberry Pi 3 B+-on kipróbálva lejátszhatatlan fájlokat készített.
@@ -242,4 +270,7 @@ docker compose restart
 
 # Leállítás
 docker compose down
+
+# Automatikus tesztek
+docker compose run --rm camera-server python -m unittest discover -s tests
 ```

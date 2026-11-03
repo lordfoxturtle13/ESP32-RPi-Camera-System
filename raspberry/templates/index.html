@@ -63,6 +63,9 @@
     ================================================ -->
     <main class="main-content">
 
+        <!-- Tárhely- vagy felvételi hiba: csak akkor látszik, ha a szerver jelzi -->
+        <div id="storage-alert" class="storage-alert hidden" role="alert"></div>
+
         <!-- Fejléc sáv -->
         <header class="topbar">
             <button class="hamburger" onclick="toggleSidebar()" aria-label="Menü">
@@ -168,8 +171,37 @@
                 <!-- Videólista -->
                 <div class="archive-list-panel">
                     <h2 class="panel-title">Felvételek</h2>
+
+                    <div class="storage-summary">
+                        <div class="storage-meter"><div id="storage-meter-used" class="storage-meter-used"></div></div>
+                        <p id="storage-summary-text" class="storage-summary-text"></p>
+                    </div>
+
+                    <form class="video-filters" onsubmit="applyVideoFilters(event)">
+                        <label class="cam-settings-field">
+                            <span>Kamera</span>
+                            <select id="filter-camera" class="login-input" onchange="applyVideoFilters(event)">
+                                <option value="">Mind</option>
+                            </select>
+                        </label>
+                        <label class="cam-settings-field">
+                            <span>Ettől</span>
+                            <input type="date" id="filter-from" class="login-input" onchange="applyVideoFilters(event)">
+                        </label>
+                        <label class="cam-settings-field">
+                            <span>Eddig</span>
+                            <input type="date" id="filter-to" class="login-input" onchange="applyVideoFilters(event)">
+                        </label>
+                    </form>
+
                     <div id="video-list" class="video-list">
                         <p class="empty-msg">Betöltés...</p>
+                    </div>
+
+                    <div class="camera-pager hidden" id="video-pager">
+                        <button type="button" class="pager-btn" id="video-prev" onclick="changeVideoPage(-1)">‹ Előző</button>
+                        <span class="pager-label" id="video-pager-label"></span>
+                        <button type="button" class="pager-btn" id="video-next" onclick="changeVideoPage(1)">Következő ›</button>
                     </div>
                 </div>
 
@@ -285,6 +317,33 @@
                             <p id="new-cam-msg" class="pw-msg hidden"></p>
                         </form>
                     </div>
+                </div>
+
+                <div class="events-panel">
+                    <div class="events-header">
+                        <h2 class="panel-title" style="margin:0">Tárhely</h2>
+                    </div>
+                    <form class="cam-settings-form" onsubmit="saveStorageSettings(event)">
+                        <label class="cam-settings-field">
+                            <span>Megőrzés (nap, 0 = nincs korlát)</span>
+                            <input type="number" id="storage-retention" class="login-input" step="1" required>
+                        </label>
+                        <label class="cam-settings-field">
+                            <span>Minimális szabad hely (%, 0 = nincs korlát)</span>
+                            <input type="number" id="storage-min-free" class="login-input" step="1" required>
+                        </label>
+                        <label class="cam-settings-field">
+                            <span>Felvétel darabolása (perc)</span>
+                            <input type="number" id="storage-segment" class="login-input" step="1" required>
+                        </label>
+                        <p class="storage-note cam-settings-wide">
+                            A kevés hely miatti törlés a legrégebbi felvételeknél kezdődik, ezért ha a tároló
+                            másra is használt lemez, a 0 érték vagy külön tároló a biztonságosabb.
+                            A védett felvételeket az automatikus törlés nem érinti.
+                        </p>
+                        <button type="submit" class="login-btn">Mentés</button>
+                        <p id="storage-msg" class="pw-msg hidden"></p>
+                    </form>
                 </div>
 
                 <div class="events-panel">

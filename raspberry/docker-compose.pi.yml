@@ -2,6 +2,9 @@
 # Használata: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build
 services:
   camera-server:
+    environment:
+      # Csak akkor rögzít, ha az USB-n ott a jelölőfájl, így nem a rendszerkártya telik meg (lásd README)
+      - REQUIRE_ARCHIVE_MARKER=1
     volumes:
       - ./archivum:/app/archivum
       - /etc/tailscale-certs:/etc/tailscale-certs:ro

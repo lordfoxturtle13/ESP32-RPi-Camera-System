@@ -29,11 +29,12 @@ function startStatusPolling() {
 async function fetchStatus() {
     try {
         const resp = await fetch('/status');
-        const data = await resp.json();
+        const { storage_alert: storageAlert, ...cameras } = await resp.json();
 
-        Object.entries(data).forEach(([camId, state]) => {
+        Object.entries(cameras).forEach(([camId, state]) => {
             updateCameraUI(Number(camId), state);
         });
+        showStorageAlert(storageAlert);
     } catch (err) {
         // Hálózati hiba esetén csendesen tűrjük (pl. RPi újraindulás)
         console.warn('[STATUS] Nem sikerült lekérni:', err);
@@ -132,6 +133,8 @@ async function toggleRecord(cameraId) {
         if (data.recording !== undefined) {
             recordingStates[cameraId] = data.recording;
             applyRecordingUI(cameraId, data.recording);
+        } else if (data.error) {
+            showStorageAlert(data.error);
         }
     } catch (err) {
         console.error('[REC] Hiba a felvétel indításakor:', err);
@@ -246,6 +249,7 @@ function showView(viewName) {
 
     // Archívum betöltése, ha arra váltunk
     if (viewName === 'archive') loadVideoList();
+    if (viewName === 'settings') loadStorageStatus();
 
     // Eseménynapló + nézők: auto-refresh indítása/leállítása
     if (viewName === 'settings') {
@@ -382,28 +386,212 @@ function makeCollapsible(header, body) {
     });
 }
 
-/** Betölti és megjeleníti az archívum videólistát. */
+/** Bájtok olvasható alakban: "152 MB" */
+function formatBytes(bytes) {
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+    return `${Math.round(bytes / 1024)} KB`;
+}
+
+function showStorageAlert(message) {
+    const banner = document.getElementById('storage-alert');
+    if (!banner) return;
+    banner.textContent = message || '';
+    banner.classList.toggle('hidden', !message);
+}
+
+const videoFilters = { page: 1 };
+
+/** A szűrők alkalmazásakor az első oldalra ugrunk, mert a régi oldalszám már nem biztos, hogy létezik. */
+function applyVideoFilters(event) {
+    event.preventDefault();
+    videoFilters.page = 1;
+    loadVideoList();
+}
+
+function changeVideoPage(delta) {
+    videoFilters.page += delta;
+    loadVideoList();
+}
+
+/** A tárhely összesítőjét és a beállítások űrlapját tölti ki. */
+async function loadStorageStatus() {
+    const summary = document.getElementById('storage-summary-text');
+    try {
+        const resp = await fetch('/api/storage');
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+
+        const usedPercent = 100 - data.free_percent;
+        document.getElementById('storage-meter-used').style.width = `${usedPercent}%`;
+        const legacy = data.unmanaged ? ` · ${data.unmanaged} régi fájl a listán kívül` : '';
+        summary.textContent =
+            `${formatBytes(data.free)} szabad / ${formatBytes(data.total)} · ` +
+            `${data.recordings} felvétel (${formatBytes(data.archive_size)}), ` +
+            `ebből ${data.protected} védett${legacy}`;
+
+        [['storage-retention', 'retention_days'],
+         ['storage-min-free', 'min_free_percent'],
+         ['storage-segment', 'segment_minutes']].forEach(([id, key]) => {
+            const input = document.getElementById(id);
+            input.min = data.ranges[key][0];
+            input.max = data.ranges[key][1];
+            // Gépelés közben ne írjuk felül az értéket
+            if (document.activeElement !== input) input.value = data.settings[key];
+        });
+        showStorageAlert(data.alert);
+    } catch (err) {
+        if (summary) summary.textContent = 'A tárhely adatai nem érhetők el.';
+        console.error('[STORAGE] Hiba:', err);
+    }
+}
+
+async function saveStorageSettings(event) {
+    event.preventDefault();
+    const msg = document.getElementById('storage-msg');
+    msg.className = 'pw-msg';
+    try {
+        const resp = await fetch('/api/storage/settings', {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify({
+                retention_days  : Number(document.getElementById('storage-retention').value),
+                min_free_percent: Number(document.getElementById('storage-min-free').value),
+                segment_minutes : Number(document.getElementById('storage-segment').value),
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+        msg.textContent = 'Mentve';
+        msg.classList.add('pw-msg-ok');
+        showStorageAlert(data.alert);
+        loadStorageStatus();
+    } catch (err) {
+        msg.textContent = err.message || 'Nem sikerült menteni';
+        msg.classList.add('pw-msg-error');
+    }
+}
+
+function fillCameraFilter(cameras) {
+    const select = document.getElementById('filter-camera');
+    const current = select.value;
+    select.length = 1;  // A "Mind" opció marad
+    cameras.forEach(cam => select.add(new Option(`${cam.name} (CAM${String(cam.id).padStart(2, '0')})`, cam.id)));
+    select.value = current;
+    if (select.selectedIndex < 0) select.value = '';
+}
+
+function buildVideoRow(item, list) {
+    const row = document.createElement('div');
+    row.className = 'video-row';
+
+    const play = document.createElement('button');
+    play.className = 'video-item-btn';
+    play.dataset.filename = item.path;
+    play.textContent = `${item.time} · ${formatBytes(item.size)}${item.recording ? ' · készül' : ''}`;
+    play.disabled = item.recording;  // A készülő fájlnak még nincs indexe, nem játszható le
+    play.addEventListener('click', () => {
+        list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
+        play.classList.add('active');
+        playVideo(item.path);
+    });
+
+    const protect = document.createElement('button');
+    protect.className = 'video-action-btn' + (item.protected ? ' is-protected' : '');
+    protect.textContent = item.protected ? 'Védett' : 'Védés';
+    protect.title = item.protected
+        ? 'Védett: az automatikus törlés nem érinti. Kattintás: védelem levétele'
+        : 'Védetté tétel: az automatikus törlés nem érinti';
+    protect.addEventListener('click', () => sendVideoAction('/api/videos/protect', 'POST',
+        { path: item.path, protected: !item.protected }));
+
+    const remove = document.createElement('button');
+    remove.className = 'video-action-btn video-delete-btn';
+    remove.textContent = 'Törlés';
+    remove.disabled = item.protected || item.recording;
+    remove.title = item.protected ? 'Védett felvétel nem törölhető' : 'Felvétel végleges törlése';
+    remove.addEventListener('click', () => deleteVideo(item));
+
+    row.append(play, protect, remove);
+    return row;
+}
+
+async function deleteVideo(item) {
+    if (!confirm(`Biztosan törlöd ezt a felvételt?\n${item.date} ${item.time}\nA törlés végleges.`)) return;
+    const done = await sendVideoAction('/api/videos', 'DELETE', { path: item.path });
+    if (!done) return;
+
+    // Ha épp ezt játsszuk, a lejátszó ne mutasson törölt fájlra
+    const mainPlayer = document.getElementById('archive-player');
+    if (mainPlayer && mainPlayer.getAttribute('src') === `/archivum_video/${item.path}`) {
+        mainPlayer.pause();
+        mainPlayer.removeAttribute('src');
+        mainPlayer.load();
+        document.getElementById('player-title').textContent = 'Válassz felvételt';
+    }
+}
+
+async function sendVideoAction(url, method, body) {
+    try {
+        const resp = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+        return true;
+    } catch (err) {
+        alert(err.message || 'A művelet nem sikerült');
+        return false;
+    } finally {
+        loadVideoList();
+    }
+}
+
+/** Betölti és megjeleníti az archívum videólistát az aktuális szűrőkkel és oldallal. */
 async function loadVideoList() {
     const list = document.getElementById('video-list');
     if (!list) return;
 
     list.innerHTML = '<p class="empty-msg">Betöltés...</p>';
+    loadStorageStatus();
+
+    const params = new URLSearchParams({ page: videoFilters.page });
+    const camera = document.getElementById('filter-camera').value;
+    const from   = document.getElementById('filter-from').value;
+    const to     = document.getElementById('filter-to').value;
+    if (camera) params.set('camera', camera);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
 
     try {
-        const resp = await fetch('/api/videos');
+        const resp = await fetch(`/api/videos?${params}`);
         const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
 
+        videoFilters.page = data.page;
+        fillCameraFilter(data.cameras);
+        updateVideoPager(data);
         list.innerHTML = '';
 
-        if (Object.keys(data).length === 0) {
-            list.innerHTML = '<p class="empty-msg">Nincsenek mentett felvételek.</p>';
+        if (data.items.length === 0) {
+            list.innerHTML = '<p class="empty-msg">Nincs a szűrésnek megfelelő felvétel.</p>';
             return;
         }
 
-        Object.entries(data).forEach(([dateKey, cameras]) => {
+        const groups = {};
+        data.items.forEach(item => {
+            const byCamera = groups[item.date] = groups[item.date] || {};
+            (byCamera[item.camera] = byCamera[item.camera] || []).push(item);
+        });
+        const names = Object.fromEntries(data.cameras.map(cam => [cam.id, cam.name]));
+
+        Object.entries(groups).forEach(([dateKey, cameras]) => {
             const dateHeader = document.createElement('p');
             dateHeader.className = 'video-date-header';
-            dateHeader.innerHTML = `<span class="date-arrow">▾</span>${formatDateLabel(dateKey)}`;
+            dateHeader.innerHTML = '<span class="date-arrow">▾</span>';
+            dateHeader.append(formatDateLabel(dateKey));
 
             const dateGroup = document.createElement('div');
             dateGroup.className = 'video-date-group';
@@ -412,10 +600,11 @@ async function loadVideoList() {
             list.appendChild(dateHeader);
             list.appendChild(dateGroup);
 
-            Object.entries(cameras).forEach(([camDir, files]) => {
+            Object.entries(cameras).forEach(([cameraId, items]) => {
                 const camHeader = document.createElement('p');
                 camHeader.className = 'video-cam-header';
-                camHeader.innerHTML = `<span class="date-arrow">▾</span>${camDirToLabel(camDir)}`;
+                camHeader.innerHTML = '<span class="date-arrow">▾</span>';
+                camHeader.append(names[cameraId] || camDirToLabel(`cam_${cameraId}`));
 
                 const camGroup = document.createElement('div');
                 camGroup.className = 'video-cam-group';
@@ -424,18 +613,7 @@ async function loadVideoList() {
                 dateGroup.appendChild(camHeader);
                 dateGroup.appendChild(camGroup);
 
-                files.forEach(filepath => {
-                    const btn = document.createElement('button');
-                    btn.className = 'video-item-btn';
-                    btn.textContent = parseTimeFromPath(filepath);
-                    btn.dataset.filename = filepath;
-                    btn.addEventListener('click', () => {
-                        list.querySelectorAll('.video-item-btn').forEach(b => b.classList.remove('active'));
-                        btn.classList.add('active');
-                        playVideo(filepath);
-                    });
-                    camGroup.appendChild(btn);
-                });
+                items.forEach(item => camGroup.appendChild(buildVideoRow(item, list)));
             });
         });
 
@@ -443,6 +621,13 @@ async function loadVideoList() {
         list.innerHTML = '<p class="empty-msg">Hiba a lista betöltésekor.</p>';
         console.error('[ARCHIVE] Hiba:', err);
     }
+}
+
+function updateVideoPager(data) {
+    document.getElementById('video-pager').classList.toggle('hidden', data.pages <= 1);
+    document.getElementById('video-pager-label').textContent = `${data.page} / ${data.pages} (${data.total} felvétel)`;
+    document.getElementById('video-prev').disabled = data.page <= 1;
+    document.getElementById('video-next').disabled = data.page >= data.pages;
 }
 
 /**
