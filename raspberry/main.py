@@ -1133,7 +1133,12 @@ def serve_video(filepath):
     # A teljes útvonalat a send_from_directory ellenőrzi, így nem lehet kilépni az archívumból
     if not filepath.endswith(".mp4"):
         abort(404)
-    return send_from_directory(ARCHIVE_DIR, filepath)
+    download = request.args.get("download") == "1"
+    if download:
+        with _storage_lock:
+            if filepath in active_recordings:  # A készülő fájlnak még nincs indexe, nem lenne lejátszható
+                return jsonify({"error": "A felvétel éppen készül"}), 409
+    return send_from_directory(ARCHIVE_DIR, filepath, as_attachment=download)
 
 
 @app.route("/api/viewers")

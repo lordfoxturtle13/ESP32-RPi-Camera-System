@@ -16,7 +16,7 @@ Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver 
 - Flash LED vezérlés ESP32-CAM kamerákon
 - Kamera állapotjelzés (online / offline / standby) automatikus újracsatlakozással
 - Eseménynapló (belépések, kilépések, felvételek, törlések, kapcsolatmegszakadások), méretkorláttal
-- Tárhelykezelés: felvételek darabolása, automatikus törlés, védett felvételek, szűrés és lapozás
+- Tárhelykezelés: felvételek darabolása, automatikus törlés, védett felvételek, letöltés, szűrés és lapozás
 - Aktív nézők listája
 - Reszponzív UI — asztali és mobil nézettel
 - Tailscale HTTPS — biztonságos távoli elérés VPN-en át

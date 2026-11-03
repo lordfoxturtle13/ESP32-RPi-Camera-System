@@ -512,7 +512,15 @@ function buildVideoRow(item, list) {
     remove.title = item.protected ? 'Védett felvétel nem törölhető' : 'Felvétel végleges törlése';
     remove.addEventListener('click', () => deleteVideo(item));
 
-    row.append(play, protect, remove);
+    // A készülő felvétel nem tölthető le: ott nincs link, csak egy tiltott gomb
+    const download = document.createElement(item.recording ? 'button' : 'a');
+    download.className = 'video-action-btn';
+    download.textContent = 'Letöltés';
+    download.title = 'Felvétel letöltése';
+    if (item.recording) download.disabled = true;
+    else download.href = `/archivum_video/${item.path}?download=1`;
+
+    row.append(play, download, protect, remove);
     return row;
 }
 

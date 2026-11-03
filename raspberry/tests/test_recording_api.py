@@ -26,7 +26,8 @@ CONFIG = {
 }
 with open(os.path.join(TEMP, "config.json"), "w", encoding="utf-8") as config_file:
     json.dump(CONFIG, config_file)
-os.environ.update(CONFIG_PATH=os.path.join(TEMP, "config.json"), ARCHIVE_DIR=ARCHIVE)
+# A jelölőfájl-ellenőrzést a Pi-s beállítás bekapcsolja, ezt a tesztek maguk kapcsolgatják
+os.environ.update(CONFIG_PATH=os.path.join(TEMP, "config.json"), ARCHIVE_DIR=ARCHIVE, REQUIRE_ARCHIVE_MARKER="0")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main    # noqa: E402
@@ -144,6 +145,32 @@ class DeleteAndProtectTests(ApiTestCase):
         main.storage_settings["retention_days"] = 1
         self.assertIn("sérült", main.run_storage_maintenance())
         self.assertTrue(self.exists(path))
+
+
+class DownloadTests(ApiTestCase):
+    def test_download_is_attachment_and_playback_is_not(self):
+        path = add_recording()
+        response = self.client.get(f"/archivum_video/{path}?download=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers["Content-Disposition"])
+        self.assertIn(os.path.basename(path), response.headers["Content-Disposition"])
+        response.close()
+        response = self.client.get(f"/archivum_video/{path}")
+        self.assertNotIn("attachment", response.headers.get("Content-Disposition", ""))
+        response.close()
+
+    def test_download_requires_login(self):
+        path = add_recording()
+        self.assertEqual(main.app.test_client().get(f"/archivum_video/{path}?download=1").status_code, 401)
+
+    def test_active_recording_cannot_be_downloaded(self):
+        path = add_recording()
+        main.active_recordings.add(path)
+        self.assertEqual(self.client.get(f"/archivum_video/{path}?download=1").status_code, 409)
+
+    def test_only_videos_inside_archive_are_served(self):
+        for path in ("events.log", "../config.json", "2026-11-01/../../config.json"):
+            self.assertIn(self.client.get(f"/archivum_video/{path}?download=1").status_code, (404, 308))
 
 
 class SettingsTests(ApiTestCase):
