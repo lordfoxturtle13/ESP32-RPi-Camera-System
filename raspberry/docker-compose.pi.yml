@@ -1,11 +1,7 @@
-# Raspberry Pi kiegészítés: hardveres kódoló eszközei, USB-s archívum, Tailscale tanúsítványok.
+# Raspberry Pi kiegészítés: USB-s archívum, Tailscale tanúsítványok.
 # Használata: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build
 services:
   camera-server:
     volumes:
       - ./archivum:/app/archivum
       - /etc/tailscale-certs:/etc/tailscale-certs:ro
-    devices:
-      - /dev/video10:/dev/video10
-      - /dev/video11:/dev/video11
-      - /dev/video12:/dev/video12

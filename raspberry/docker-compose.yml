@@ -11,8 +11,6 @@ services:
       # A konténeren belül minden címen figyel, a tényleges korlát a fenti port beállítás
       - HOST=0.0.0.0
       - TRUST_PROXY=${TRUST_PROXY:-1}
-      # Szoftveres kódoló, mindenhol működik. Raspberry Pi-n hardveres: h264_v4l2m2m
-      - H264_CODEC=${H264_CODEC:-libx264}
     volumes:
       - ./config.json:/app/config.json
       # A felvételek helye az ARCHIVE_PATH változóval módosítható

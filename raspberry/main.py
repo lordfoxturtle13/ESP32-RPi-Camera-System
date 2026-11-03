@@ -93,7 +93,7 @@ STREAM_URL_SCHEMES = ("rtsp", "http", "https")  # A kamera URL nem mutathat pl. 
 LED_URL_SCHEMES    = ("http", "https")
 ARCHIVE_DIR       = os.environ.get("ARCHIVE_DIR", os.path.join(os.path.dirname(__file__), "archivum"))
 
-# RPi4: "h264_v4l2m2m" (hardveres), PC/Docker: "libx264" (szoftveres)
+# Szoftveres kódoló: minden gépen működik. A hardveres h264_v4l2m2m Pi 3 B+-on hibás fájlokat készített.
 H264_CODEC = os.environ.get("H264_CODEC", "libx264")
 
 # Sikertelen jelszópróbák IP-címenként: {ip: {"fails", "locked_until", "last"}}

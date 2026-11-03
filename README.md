@@ -136,13 +136,13 @@ TRUST_PROXY=0
 
 ### 1. Pi-s beállítások bekapcsolása
 
-Az alábbi sor után a sima `docker compose` parancsok a Pi-s kiegészítést is használják: a felvételek az `archivum` mappába kerülnek, és csatolódnak a tanúsítványok és a videóeszközök.
+Az alábbi sor után a sima `docker compose` parancsok a Pi-s kiegészítést is használják: a felvételek az `archivum` mappába kerülnek, és csatolódnak a tanúsítványok.
 
 ```bash
 echo "COMPOSE_FILE=docker-compose.yml:docker-compose.pi.yml" > .env
 ```
 
-A kódoló itt is szoftveres (`libx264`). A hardveres `h264_v4l2m2m` kódolót ne használd: Raspberry Pi 3 B+-on kipróbálva lejátszhatatlan fájlokat készített.
+A kódoló itt is szoftveres (`libx264`). A hardveres `h264_v4l2m2m` kódoló nincs támogatva: Raspberry Pi 3 B+-on kipróbálva lejátszhatatlan fájlokat készített.
 
 ### Teljesítmény
 
