@@ -1,16 +1,18 @@
 # ŐRSzem — ESP32-RPi Kamera Rendszer
 
-Több kamerás megfigyelőrendszer ESP32-CAM modulokkal és Raspberry Pi szerverrel. A webfelület élő képet, H.264 felvételt, LED vezérlést és eseménynaplót biztosít, Tailscale-en keresztül HTTPS-sel elérhető bárhonnan.
+Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver Raspberry Pi-n vagy bármilyen más, Dockert futtató gépen működik. A webfelület élő képet, H.264 felvételt, LED vezérlést és eseménynaplót biztosít, Tailscale-en keresztül HTTPS-sel elérhető bárhonnan.
 
 ## Hardver
 
-- **Raspberry Pi 4** (ajánlott: 4GB+ RAM) — szerver, stream feldolgozás, felvételek tárolása
+- **Szerver:** Raspberry Pi 4 (ajánlott: 4GB+ RAM) vagy bármilyen más gép Dockerrel — stream feldolgozás, felvételek tárolása
 - **ESP32-CAM AI Thinker** — kamera modul, RTSP stream, flash LED
+- **Luckfox** — kamera modul, RTSP stream
+- **Egyéb kamera** — a teljes stream URL megadásával
 
 ## Funkciók
 
 - Élő MJPEG stream tetszőleges számú kamerától (a határ a gép teljesítménye és a sávszélesség)
-- H.264 felvétel hardveres encoderrel (RPi V4L2) — dupla stream (640×480 főstream + 160×120 al-stream gyors tekeréshez)
+- H.264 felvétel, alapból szoftveres kódolóval (`libx264`), Raspberry Pi-n bekapcsolható hardveres kódolóval (V4L2) — dupla stream (főstream + 160×120 al-stream gyors tekeréshez)
 - Flash LED vezérlés ESP32-CAM kamerákon
 - Kamera állapotjelzés (online / offline / standby) automatikus újracsatlakozással
 - Eseménynapló (belépések, kilépések, felvételek, kapcsolatmegszakadások)
@@ -158,14 +160,14 @@ sudo tailscale cert \
 
 ### 3. Cert auto-renewal beállítása
 
-A Tailscale cert 90 napig érvényes. Az alábbi script naponta ellenőrzi és szükség esetén megújítja, majd újraindítja a containert:
+A Tailscale cert 90 napig érvényes. Az alábbi script naponta ellenőrzi és szükség esetén megújítja, majd újraindítja a containert. A futtatás előtt írd át a `HOSTNAME` értékét a gép nevére, a `/UTVONAL/A/REPOHOZ` részt pedig annak a mappának a teljes útvonalára, ahová a repót klónoztad:
 
 ```bash
 sudo tee /usr/local/bin/tailscale-cert-renew.sh > /dev/null << 'EOF'
 #!/bin/bash
 HOSTNAME="HOSTNAME.ts.net"
 CERT_DIR="/etc/tailscale-certs"
-COMPOSE_DIR="/home/lordf/ESP32-RPi-Camera-System/raspberry"
+COMPOSE_DIR="/UTVONAL/A/REPOHOZ/raspberry"
 CERT_FILE="$CERT_DIR/$HOSTNAME.crt"
 
 BEFORE=$(stat -c %Y "$CERT_FILE" 2>/dev/null || echo 0)
@@ -210,7 +212,7 @@ A szerver elérhető: `https://HOSTNAME.ts.net:5000`
 
 ## ESP32-CAM firmware
 
-A firmware PlatformIO-val töltható fel. A WiFi adatokat a `secrets.h` fájlba kell írni (ez gitignore-ban van, a `secrets.h.example` alapján hozd létre):
+A firmware PlatformIO-val tölthető fel. A WiFi adatokhoz hozd létre az `esp32_cam/src/secrets.h` fájlt az alábbi tartalommal (ez gitignore-ban van, ezért nem része a repónak):
 
 ```cpp
 const char* ssid     = "wifi-nev";
