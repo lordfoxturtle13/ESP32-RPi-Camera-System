@@ -118,7 +118,7 @@ MAX_VIDEOS_PER_PAGE      = 200
 ARCHIVE_MARKER_FILE      = ".orszem-archive"
 REQUIRE_ARCHIVE_MARKER   = os.environ.get("REQUIRE_ARCHIVE_MARKER", "0") == "1"
 SHUTDOWN_WAIT_S          = 8        # A docker stop 10 mp után kényszerrel leállít
-SERVER_PORT              = 5000
+SERVER_PORT              = int(os.environ.get("PORT", "5000"))
 # Minden megnyitott élőkép végig lefoglal egy szálat. A korlát miatt a felület többi kérésének
 # mindig marad szabad szál, különben sok megnyitott élőkép mellett az egész oldal megállna.
 SERVER_THREADS           = 24

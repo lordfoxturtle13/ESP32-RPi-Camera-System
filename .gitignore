@@ -15,3 +15,5 @@ raspberry/config.json
 archivum/
 raspberry/felvetelek/
 raspberry/.env
+# Az ESP32CAM-RTSP firmware helyi klónja (külön repó, valódi jelszavakkal)
+esp32cam-rtsp/
