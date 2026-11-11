@@ -160,11 +160,6 @@
                 <div class="archive-list-panel">
                     <h2 class="panel-title">Felvételek</h2>
 
-                    <div class="storage-summary">
-                        <div class="storage-meter"><div id="storage-meter-used" class="storage-meter-used"></div></div>
-                        <p id="storage-summary-text" class="storage-summary-text"></p>
-                    </div>
-
                     <div id="video-list" class="video-list">
                         <p class="empty-msg">Betöltés...</p>
                     </div>
@@ -198,32 +193,6 @@
 
             <div class="settings-layout">
                 <h2 class="panel-title">Rendszer információ</h2>
-
-                <div class="events-panel">
-                    <div class="events-header">
-                        <h2 class="panel-title" style="margin:0">Tárhely</h2>
-                    </div>
-                    <form class="cam-settings-form" onsubmit="saveStorageSettings(event)">
-                        <label class="cam-settings-field">
-                            <span>Megőrzés (nap, 0 = nincs korlát)</span>
-                            <input type="number" id="storage-retention" class="login-input" step="1" required>
-                        </label>
-                        <label class="cam-settings-field">
-                            <span>Minimális szabad hely (%, 0 = nincs korlát)</span>
-                            <input type="number" id="storage-min-free" class="login-input" step="1" required>
-                        </label>
-                        <label class="cam-settings-field">
-                            <span>Felvétel darabolása (perc)</span>
-                            <input type="number" id="storage-segment" class="login-input" step="1" required>
-                        </label>
-                        <p class="storage-note cam-settings-wide">
-                            A kevés hely miatti törlés a legrégebbi felvételeknél kezdődik, ezért ha a tároló
-                            másra is használt lemez, a 0 érték vagy külön tároló a biztonságosabb.
-                                                    </p>
-                        <button type="submit" class="login-btn">Mentés</button>
-                        <p id="storage-msg" class="pw-msg hidden"></p>
-                    </form>
-                </div>
 
                 <div class="events-panel">
                     <div class="events-header">

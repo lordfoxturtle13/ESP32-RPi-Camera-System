@@ -86,15 +86,10 @@ H264_CODEC = os.environ.get("H264_CODEC", "libx264")
 KEYFRAME_INTERVAL_MAIN_S = 2
 KEYFRAME_INTERVAL_SUB_S  = 1
 
-# Tárhelykezelés alapértékei és a beállítható tartományok. A 0 az adott szabályt kikapcsolja.
+# Tárhelykezelés alapértékei, a config.json "storage" része felülírja. A 0 az adott szabályt kikapcsolja.
 DEFAULT_STORAGE_SETTINGS = {"retention_days": 30, "min_free_percent": 10, "segment_minutes": 15}
-STORAGE_SETTING_RANGES   = {"retention_days": (0, 3650), "min_free_percent": (0, 50), "segment_minutes": (1, 120)}
 STORAGE_CHECK_INTERVAL_S = 60
 EVENT_LOG_MAX_BYTES      = 5 * 1024 * 1024  # E fölött új naplófájl kezdődik, és csak az előző marad meg
-# Ha be van kapcsolva, csak olyan helyre rögzítünk, ahol ez a fájl megvan. Így a kihúzott USB
-# helyett nem a rendszerkártya telik meg, ahová a csatolási pont mutat.
-ARCHIVE_MARKER_FILE      = ".orszem-archive"
-REQUIRE_ARCHIVE_MARKER   = os.environ.get("REQUIRE_ARCHIVE_MARKER", "0") == "1"
 SHUTDOWN_WAIT_S          = 8        # A docker stop 10 mp után kényszerrel leállít
 SERVER_PORT              = 5000
 # Minden megnyitott élőkép végig lefoglal egy szálat. A korlát miatt a felület többi kérésének
@@ -155,20 +150,17 @@ def update_config(change):
             json.dump(config_data, f, indent=4, ensure_ascii=False)
 
 
-def validate_storage_setting(key, value):
-    low, high = STORAGE_SETTING_RANGES[key]
-    return type(value) is int and low <= value <= high
-
-
 def load_storage_settings(saved):
-    """Tárhely-beállítások a configból; hibás érték esetén az alapértelmezés."""
+    """Tárhely-beállítások a config.json-ból; hiányzó vagy hibás érték esetén az alapérték."""
     settings = dict(DEFAULT_STORAGE_SETTINGS)
     for key, value in (saved or {}).items():
-        if key in settings:
-            if validate_storage_setting(key, value):
-                settings[key] = value
-            else:
-                log.warning(f"Tárhely: hibás config ({key}), alapértelmezés használva")
+        if key not in settings:
+            continue
+        minimum = 1 if key == "segment_minutes" else 0
+        if type(value) is int and value >= minimum:
+            settings[key] = value
+        else:
+            log.warning(f"Tárhely: hibás config ({key}), alapértelmezés használva")
     return settings
 
 
@@ -489,12 +481,6 @@ def writer_worker(camera_id):
 # 3. TÁRHELYKEZELÉS — automatikus törlés és ellenőrzés
 # ==========================================
 
-def archive_unavailable_reason():
-    if REQUIRE_ARCHIVE_MARKER and not os.path.exists(os.path.join(ARCHIVE_DIR, ARCHIVE_MARKER_FILE)):
-        return "A felvételek tárolója nem érhető el (lehet, hogy ki van húzva az USB)."
-    return None
-
-
 def low_space_reason():
     minimum = storage_settings["min_free_percent"]
     if minimum and storage.free_percent(shutil.disk_usage(ARCHIVE_DIR)) < minimum:
@@ -511,21 +497,20 @@ def stop_all_recordings(reason):
 
 def run_storage_maintenance():
     """Automatikus törlés és a tároló ellenőrzése. Visszaadja a felvételt akadályozó okot, ha van."""
-    problem = archive_unavailable_reason()
-    if problem is None:
-        try:
-            with _storage_lock:
-                deleted, enough_space = storage.run_cleanup(
-                    ARCHIVE_DIR, storage_settings["retention_days"], storage_settings["min_free_percent"],
-                    set(active_recordings),
-                )
-            for path, reason in deleted:
-                log_system_event(f"[AUTOMATIKUS TÖRLÉS] {path} ({reason})")
-            if not enough_space:
-                problem = low_space_reason() or "Kevés a szabad hely."
-        except OSError as e:
-            log.error(f"[TÁRHELY] A tároló nem érhető el: {e}")
-            problem = "A felvételek tárolója nem érhető el."
+    problem = None
+    try:
+        with _storage_lock:
+            deleted, enough_space = storage.run_cleanup(
+                ARCHIVE_DIR, storage_settings["retention_days"], storage_settings["min_free_percent"],
+                set(active_recordings),
+            )
+        for path, reason in deleted:
+            log_system_event(f"[AUTOMATIKUS TÖRLÉS] {path} ({reason})")
+        if not enough_space:
+            problem = low_space_reason() or "Kevés a szabad hely."
+    except OSError as e:
+        log.error(f"[TÁRHELY] A tároló nem érhető el: {e}")
+        problem = "A felvételek tárolója nem érhető el."
 
     if problem and problem != storage_state["problem"]:
         log_system_event(f"[TÁRHELY] {problem}")
@@ -729,46 +714,6 @@ def list_videos():
         "size"       : r.size,
         "recording"  : r.active,
     } for r in storage.scan_recordings(ARCHIVE_DIR, active)])
-
-
-@app.route("/api/storage")
-def storage_status():
-    """Tárhely állapota és beállításai a felület számára."""
-    try:
-        usage = shutil.disk_usage(ARCHIVE_DIR)
-    except OSError:
-        return jsonify({"error": "A tároló nem érhető el"}), 503
-
-    recordings = storage.scan_recordings(ARCHIVE_DIR)
-    return jsonify({
-        "total"        : usage.total,
-        "free"         : usage.free,
-        "free_percent" : round(storage.free_percent(usage), 1),
-        "archive_size" : sum(r.size for r in recordings),
-        "recordings"   : len(recordings),
-        "unmanaged"    : storage.count_unmanaged_videos(ARCHIVE_DIR),
-        "alert"        : storage_state["write_error"] or storage_state["problem"],
-        "settings"     : storage_settings,
-        "ranges"       : STORAGE_SETTING_RANGES,
-    })
-
-
-@app.route("/api/storage/settings", methods=["POST"])
-def save_storage_settings():
-    data = request.get_json(silent=True) or {}
-    new_settings = {key: data.get(key) for key in DEFAULT_STORAGE_SETTINGS}
-    for key, value in new_settings.items():
-        if not validate_storage_setting(key, value):
-            low, high = STORAGE_SETTING_RANGES[key]
-            return jsonify({"error": f"Érvénytelen érték ({key}): {low} és {high} között lehet"}), 400
-
-    update_config(lambda config_data: config_data.update(storage=new_settings))
-    storage_settings.update(new_settings)
-    log_system_event(
-        f"[TÁRHELY] {request.remote_addr} módosította: megőrzés {new_settings['retention_days']} nap, "
-        f"szabad hely {new_settings['min_free_percent']}%, darabolás {new_settings['segment_minutes']} perc"
-    )
-    return jsonify({"success": True, "settings": storage_settings, "alert": run_storage_maintenance()})
 
 
 @app.route("/archivum_video/<path:filepath>")

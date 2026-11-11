@@ -200,7 +200,6 @@ function showView(viewName) {
 
     // Archívum betöltése, ha arra váltunk
     if (viewName === 'archive') loadVideoList();
-    if (viewName === 'settings') loadStorageStatus();
 
     // Eseménynapló + nézők: auto-refresh indítása/leállítása
     if (viewName === 'settings') {
@@ -344,63 +343,6 @@ function showStorageAlert(message) {
     banner.classList.toggle('hidden', !message);
 }
 
-/** A tárhely összesítőjét és a beállítások űrlapját tölti ki. */
-async function loadStorageStatus() {
-    const summary = document.getElementById('storage-summary-text');
-    try {
-        const resp = await fetch('/api/storage');
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error);
-
-        const usedPercent = 100 - data.free_percent;
-        document.getElementById('storage-meter-used').style.width = `${usedPercent}%`;
-        const legacy = data.unmanaged ? ` · ${data.unmanaged} régi fájl a listán kívül` : '';
-        summary.textContent =
-            `${formatBytes(data.free)} szabad / ${formatBytes(data.total)} · ` +
-            `${data.recordings} felvétel (${formatBytes(data.archive_size)})${legacy}`;
-
-        [['storage-retention', 'retention_days'],
-         ['storage-min-free', 'min_free_percent'],
-         ['storage-segment', 'segment_minutes']].forEach(([id, key]) => {
-            const input = document.getElementById(id);
-            input.min = data.ranges[key][0];
-            input.max = data.ranges[key][1];
-            // Gépelés közben ne írjuk felül az értéket
-            if (document.activeElement !== input) input.value = data.settings[key];
-        });
-        showStorageAlert(data.alert);
-    } catch (err) {
-        if (summary) summary.textContent = 'A tárhely adatai nem érhetők el.';
-        console.error('[STORAGE] Hiba:', err);
-    }
-}
-
-async function saveStorageSettings(event) {
-    event.preventDefault();
-    const msg = document.getElementById('storage-msg');
-    msg.className = 'pw-msg';
-    try {
-        const resp = await fetch('/api/storage/settings', {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({
-                retention_days  : Number(document.getElementById('storage-retention').value),
-                min_free_percent: Number(document.getElementById('storage-min-free').value),
-                segment_minutes : Number(document.getElementById('storage-segment').value),
-            }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error);
-        msg.textContent = 'Mentve';
-        msg.classList.add('pw-msg-ok');
-        showStorageAlert(data.alert);
-        loadStorageStatus();
-    } catch (err) {
-        msg.textContent = err.message || 'Nem sikerült menteni';
-        msg.classList.add('pw-msg-error');
-    }
-}
-
 function buildVideoRow(item, list) {
     const row = document.createElement('div');
     row.className = 'video-row';
@@ -432,7 +374,6 @@ async function loadVideoList() {
     if (!list) return;
 
     list.innerHTML = '<p class="empty-msg">Betöltés...</p>';
-    loadStorageStatus();
 
     try {
         const resp  = await fetch('/api/videos');

@@ -77,11 +77,6 @@ def _list_dir(path):
         return []
 
 
-def count_unmanaged_videos(archive_dir):
-    """Az archívum gyökerében lévő régi videók száma: ezeket a rendszer nem listázza és nem törli."""
-    return sum(1 for name in _list_dir(archive_dir) if name.endswith(".mp4"))
-
-
 def delete_recording(archive_dir, path):
     """A fő- és az al-stream törlése, majd a kiürült mappák eltávolítása."""
     if parse_recording_path(path) is None:
