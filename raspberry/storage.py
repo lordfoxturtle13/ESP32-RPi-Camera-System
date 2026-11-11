@@ -1,10 +1,9 @@
 """
-Felvételek tárolásának kezelése: listázás, védett felvételek és automatikus törlés.
+Felvételek tárolásának kezelése: listázás és automatikus törlés.
 
 A modul csak a ÉÉÉÉ-HH-NN/cam_N/cam_N_ÉÉÉÉHHNN_ÓÓPPMM_main.mp4 felépítésű felvételekkel
 foglalkozik. Minden más fájlhoz (például a régi, mappa nélküli felvételekhez) nem nyúl.
 """
-import json
 import os
 import re
 import shutil
@@ -13,15 +12,10 @@ from datetime import datetime, timedelta
 
 MAIN_SUFFIX    = "_main.mp4"
 SUB_SUFFIX     = "_sub.mp4"
-PROTECTED_FILE = "protected.json"
 
 _RECORDING_RE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})/cam_(?P<camera>\d+)/cam_(?P=camera)_(?P<stamp>\d{8}_\d{6})_main\.mp4$"
 )
-
-
-class ProtectedListError(Exception):
-    """A védett felvételek listája nem olvasható, ezért törölni sem szabad."""
 
 
 @dataclass
@@ -30,7 +24,6 @@ class Recording:
     camera: int
     started: datetime
     size: int             # A fő- és az al-stream együttes mérete bájtban
-    protected: bool = False
     active: bool = False  # Éppen készül vagy lezárás alatt áll
 
 
@@ -60,7 +53,7 @@ def _size_or_zero(path):
         return 0
 
 
-def scan_recordings(archive_dir, protected=frozenset(), active=frozenset()):
+def scan_recordings(archive_dir, active=frozenset()):
     """A kezelt felvételek listája, a legújabbal kezdve."""
     recordings = []
     for date_dir in _list_dir(archive_dir):
@@ -72,7 +65,7 @@ def scan_recordings(archive_dir, protected=frozenset(), active=frozenset()):
                     continue
                 size = (_size_or_zero(_full_path(archive_dir, path))
                         + _size_or_zero(_full_path(archive_dir, sub_path(path))))
-                recordings.append(Recording(path, parsed[0], parsed[1], size, path in protected, path in active))
+                recordings.append(Recording(path, parsed[0], parsed[1], size, path in active))
     recordings.sort(key=lambda r: (r.started, r.path), reverse=True)
     return recordings
 
@@ -87,43 +80,6 @@ def _list_dir(path):
 def count_unmanaged_videos(archive_dir):
     """Az archívum gyökerében lévő régi videók száma: ezeket a rendszer nem listázza és nem törli."""
     return sum(1 for name in _list_dir(archive_dir) if name.endswith(".mp4"))
-
-
-def load_protected(archive_dir):
-    """A védett felvételek halmaza, vagy None, ha még nincs lista."""
-    try:
-        with open(os.path.join(archive_dir, PROTECTED_FILE), encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        raise ProtectedListError(str(e)) from e
-    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
-        raise ProtectedListError("Hibás formátum")
-    return set(data)
-
-
-def save_protected(archive_dir, protected):
-    # Ideiglenes fájlon át írunk, hogy egy áramszünet ne hagyjon félkész listát
-    path = os.path.join(archive_dir, PROTECTED_FILE)
-    temp = path + ".tmp"
-    with open(temp, "w", encoding="utf-8") as f:
-        json.dump(sorted(protected), f, indent=2, ensure_ascii=False)
-    os.replace(temp, path)
-
-
-def initialize_protected(archive_dir):
-    """
-    Az első induláskor minden meglévő felvétel védett lesz, így az automatikus törlés
-    csak a funkció bevezetése után készült felvételeket érinti.
-    Visszaad: (védett felvételek, újonnan védetté tett felvételek száma).
-    """
-    protected = load_protected(archive_dir)
-    if protected is not None:
-        return protected, 0
-    protected = {recording.path for recording in scan_recordings(archive_dir)}
-    save_protected(archive_dir, protected)
-    return protected, len(protected)
 
 
 def delete_recording(archive_dir, path):
@@ -150,14 +106,13 @@ def free_percent(usage):
     return usage.free / usage.total * 100 if usage.total else 0
 
 
-def run_cleanup(archive_dir, retention_days, min_free_percent, protected, active, now=None, usage_fn=shutil.disk_usage):
+def run_cleanup(archive_dir, retention_days, min_free_percent, active, now=None, usage_fn=shutil.disk_usage):
     """
-    Automatikus törlés, mindig a legrégebbi felvételtől kezdve. A védett és a készülő
-    felvételekhez nem nyúl. A 0 érték az adott szabályt kikapcsolja.
+    Automatikus törlés, mindig a legrégebbi felvételtől kezdve. A készülő felvételekhez nem nyúl. A 0 érték az adott szabályt kikapcsolja.
     Visszaad: (törölt felvételek [(útvonal, ok)], van-e elég szabad hely).
     """
     now        = now or datetime.now()
-    candidates = [r for r in scan_recordings(archive_dir, protected, active) if not r.protected and not r.active]
+    candidates = [r for r in scan_recordings(archive_dir, active) if not r.active]
     candidates.sort(key=lambda r: (r.started, r.path))
     deleted    = []
 

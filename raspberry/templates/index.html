@@ -165,31 +165,8 @@
                         <p id="storage-summary-text" class="storage-summary-text"></p>
                     </div>
 
-                    <form class="video-filters" onsubmit="applyVideoFilters(event)">
-                        <label class="cam-settings-field">
-                            <span>Kamera</span>
-                            <select id="filter-camera" class="login-input" onchange="applyVideoFilters(event)">
-                                <option value="">Mind</option>
-                            </select>
-                        </label>
-                        <label class="cam-settings-field">
-                            <span>Ettől</span>
-                            <input type="date" id="filter-from" class="login-input" onchange="applyVideoFilters(event)">
-                        </label>
-                        <label class="cam-settings-field">
-                            <span>Eddig</span>
-                            <input type="date" id="filter-to" class="login-input" onchange="applyVideoFilters(event)">
-                        </label>
-                    </form>
-
                     <div id="video-list" class="video-list">
                         <p class="empty-msg">Betöltés...</p>
-                    </div>
-
-                    <div class="camera-pager hidden" id="video-pager">
-                        <button type="button" class="pager-btn" id="video-prev" onclick="changeVideoPage(-1)">‹ Előző</button>
-                        <span class="pager-label" id="video-pager-label"></span>
-                        <button type="button" class="pager-btn" id="video-next" onclick="changeVideoPage(1)">Következő ›</button>
                     </div>
                 </div>
 
@@ -208,7 +185,6 @@
                         </video>
                     </div>
 
-                    <p class="player-hint">Dupla kattintás → teljes képernyő</p>
                 </div>
 
             </div>
@@ -243,8 +219,7 @@
                         <p class="storage-note cam-settings-wide">
                             A kevés hely miatti törlés a legrégebbi felvételeknél kezdődik, ezért ha a tároló
                             másra is használt lemez, a 0 érték vagy külön tároló a biztonságosabb.
-                            A védett felvételeket az automatikus törlés nem érinti.
-                        </p>
+                                                    </p>
                         <button type="submit" class="login-btn">Mentés</button>
                         <p id="storage-msg" class="pw-msg hidden"></p>
                     </form>

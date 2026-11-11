@@ -330,13 +330,6 @@ function parseTimeFromPath(filepath) {
     return t.length === 6 ? `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}` : filepath;
 }
 
-function makeCollapsible(header, body) {
-    header.addEventListener('click', () => {
-        const collapsed = body.classList.toggle('collapsed');
-        header.querySelector('.date-arrow').textContent = collapsed ? '▸' : '▾';
-    });
-}
-
 /** Bájtok olvasható alakban: "152 MB" */
 function formatBytes(bytes) {
     if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -349,20 +342,6 @@ function showStorageAlert(message) {
     if (!banner) return;
     banner.textContent = message || '';
     banner.classList.toggle('hidden', !message);
-}
-
-const videoFilters = { page: 1 };
-
-/** A szűrők alkalmazásakor az első oldalra ugrunk, mert a régi oldalszám már nem biztos, hogy létezik. */
-function applyVideoFilters(event) {
-    event.preventDefault();
-    videoFilters.page = 1;
-    loadVideoList();
-}
-
-function changeVideoPage(delta) {
-    videoFilters.page += delta;
-    loadVideoList();
 }
 
 /** A tárhely összesítőjét és a beállítások űrlapját tölti ki. */
@@ -378,8 +357,7 @@ async function loadStorageStatus() {
         const legacy = data.unmanaged ? ` · ${data.unmanaged} régi fájl a listán kívül` : '';
         summary.textContent =
             `${formatBytes(data.free)} szabad / ${formatBytes(data.total)} · ` +
-            `${data.recordings} felvétel (${formatBytes(data.archive_size)}), ` +
-            `ebből ${data.protected} védett${legacy}`;
+            `${data.recordings} felvétel (${formatBytes(data.archive_size)})${legacy}`;
 
         [['storage-retention', 'retention_days'],
          ['storage-min-free', 'min_free_percent'],
@@ -423,22 +401,12 @@ async function saveStorageSettings(event) {
     }
 }
 
-function fillCameraFilter(cameras) {
-    const select = document.getElementById('filter-camera');
-    const current = select.value;
-    select.length = 1;  // A "Mind" opció marad
-    cameras.forEach(cam => select.add(new Option(`${cam.name} (CAM${String(cam.id).padStart(2, '0')})`, cam.id)));
-    select.value = current;
-    if (select.selectedIndex < 0) select.value = '';
-}
-
 function buildVideoRow(item, list) {
     const row = document.createElement('div');
     row.className = 'video-row';
 
     const play = document.createElement('button');
     play.className = 'video-item-btn';
-    play.dataset.filename = item.path;
     play.textContent = `${item.time} · ${formatBytes(item.size)}${item.recording ? ' · készül' : ''}`;
     play.disabled = item.recording;  // A készülő fájlnak még nincs indexe, nem játszható le
     play.addEventListener('click', () => {
@@ -447,68 +415,18 @@ function buildVideoRow(item, list) {
         playVideo(item.path);
     });
 
-    const protect = document.createElement('button');
-    protect.className = 'video-action-btn' + (item.protected ? ' is-protected' : '');
-    protect.textContent = item.protected ? 'Védett' : 'Védés';
-    protect.title = item.protected
-        ? 'Védett: az automatikus törlés nem érinti. Kattintás: védelem levétele'
-        : 'Védetté tétel: az automatikus törlés nem érinti';
-    protect.addEventListener('click', () => sendVideoAction('/api/videos/protect', 'POST',
-        { path: item.path, protected: !item.protected }));
-
-    const remove = document.createElement('button');
-    remove.className = 'video-action-btn video-delete-btn';
-    remove.textContent = 'Törlés';
-    remove.disabled = item.protected || item.recording;
-    remove.title = item.protected ? 'Védett felvétel nem törölhető' : 'Felvétel végleges törlése';
-    remove.addEventListener('click', () => deleteVideo(item));
-
     // A készülő felvétel nem tölthető le: ott nincs link, csak egy tiltott gomb
     const download = document.createElement(item.recording ? 'button' : 'a');
     download.className = 'video-action-btn';
     download.textContent = 'Letöltés';
-    download.title = 'Felvétel letöltése';
     if (item.recording) download.disabled = true;
     else download.href = `/archivum_video/${item.path}?download=1`;
 
-    row.append(play, download, protect, remove);
+    row.append(play, download);
     return row;
 }
 
-async function deleteVideo(item) {
-    if (!confirm(`Biztosan törlöd ezt a felvételt?\n${item.date} ${item.time}\nA törlés végleges.`)) return;
-    const done = await sendVideoAction('/api/videos', 'DELETE', { path: item.path });
-    if (!done) return;
-
-    // Ha épp ezt játsszuk, a lejátszó ne mutasson törölt fájlra
-    const mainPlayer = document.getElementById('archive-player');
-    if (mainPlayer && mainPlayer.getAttribute('src') === `/archivum_video/${item.path}`) {
-        mainPlayer.pause();
-        mainPlayer.removeAttribute('src');
-        mainPlayer.load();
-        document.getElementById('player-title').textContent = 'Válassz felvételt';
-    }
-}
-
-async function sendVideoAction(url, method, body) {
-    try {
-        const resp = await fetch(url, {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify(body),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error);
-        return true;
-    } catch (err) {
-        alert(err.message || 'A művelet nem sikerült');
-        return false;
-    } finally {
-        loadVideoList();
-    }
-}
-
-/** Betölti és megjeleníti az archívum videólistát az aktuális szűrőkkel és oldallal. */
+/** Betölti az archívum felvételeit, dátum és azon belül kamera szerint csoportosítva. */
 async function loadVideoList() {
     const list = document.getElementById('video-list');
     if (!list) return;
@@ -516,63 +434,35 @@ async function loadVideoList() {
     list.innerHTML = '<p class="empty-msg">Betöltés...</p>';
     loadStorageStatus();
 
-    const params = new URLSearchParams({ page: videoFilters.page });
-    const camera = document.getElementById('filter-camera').value;
-    const from   = document.getElementById('filter-from').value;
-    const to     = document.getElementById('filter-to').value;
-    if (camera) params.set('camera', camera);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-
     try {
-        const resp = await fetch(`/api/videos?${params}`);
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error);
+        const resp  = await fetch('/api/videos');
+        const items = await resp.json();
+        if (!resp.ok) throw new Error(items.error);
 
-        videoFilters.page = data.page;
-        fillCameraFilter(data.cameras);
-        updateVideoPager(data);
         list.innerHTML = '';
-
-        if (data.items.length === 0) {
-            list.innerHTML = '<p class="empty-msg">Nincs a szűrésnek megfelelő felvétel.</p>';
+        if (items.length === 0) {
+            list.innerHTML = '<p class="empty-msg">Még nincs felvétel.</p>';
             return;
         }
 
         const groups = {};
-        data.items.forEach(item => {
+        items.forEach(item => {
             const byCamera = groups[item.date] = groups[item.date] || {};
-            (byCamera[item.camera] = byCamera[item.camera] || []).push(item);
+            (byCamera[item.camera_name] = byCamera[item.camera_name] || []).push(item);
         });
-        const names = Object.fromEntries(data.cameras.map(cam => [cam.id, cam.name]));
 
         Object.entries(groups).forEach(([dateKey, cameras]) => {
             const dateHeader = document.createElement('p');
             dateHeader.className = 'video-date-header';
-            dateHeader.innerHTML = '<span class="date-arrow">▾</span>';
-            dateHeader.append(formatDateLabel(dateKey));
-
-            const dateGroup = document.createElement('div');
-            dateGroup.className = 'video-date-group';
-
-            makeCollapsible(dateHeader, dateGroup);
+            dateHeader.textContent = formatDateLabel(dateKey);
             list.appendChild(dateHeader);
-            list.appendChild(dateGroup);
 
-            Object.entries(cameras).forEach(([cameraId, items]) => {
+            Object.entries(cameras).forEach(([cameraName, cameraItems]) => {
                 const camHeader = document.createElement('p');
                 camHeader.className = 'video-cam-header';
-                camHeader.innerHTML = '<span class="date-arrow">▾</span>';
-                camHeader.append(names[cameraId] || camDirToLabel(`cam_${cameraId}`));
-
-                const camGroup = document.createElement('div');
-                camGroup.className = 'video-cam-group';
-
-                makeCollapsible(camHeader, camGroup);
-                dateGroup.appendChild(camHeader);
-                dateGroup.appendChild(camGroup);
-
-                items.forEach(item => camGroup.appendChild(buildVideoRow(item, list)));
+                camHeader.textContent = cameraName;
+                list.appendChild(camHeader);
+                cameraItems.forEach(item => list.appendChild(buildVideoRow(item, list)));
             });
         });
 
@@ -580,13 +470,6 @@ async function loadVideoList() {
         list.innerHTML = '<p class="empty-msg">Hiba a lista betöltésekor.</p>';
         console.error('[ARCHIVE] Hiba:', err);
     }
-}
-
-function updateVideoPager(data) {
-    document.getElementById('video-pager').classList.toggle('hidden', data.pages <= 1);
-    document.getElementById('video-pager-label').textContent = `${data.page} / ${data.pages} (${data.total} felvétel)`;
-    document.getElementById('video-prev').disabled = data.page <= 1;
-    document.getElementById('video-next').disabled = data.page >= data.pages;
 }
 
 /**
@@ -717,30 +600,6 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('beforeunload', () => {
     navigator.sendBeacon('/api/disconnect');
-});
-
-// ================================================
-// ARCHÍVUM — Nyíl billentyűs navigáció
-// ================================================
-
-document.addEventListener('keydown', (e) => {
-    if (currentView !== 'archive') return;
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-
-    // Csak a látható (nem becsukott) csoportban lévő gombok
-    const buttons = [...document.querySelectorAll('#video-list .video-cam-group:not(.collapsed) .video-item-btn')];
-    if (buttons.length === 0) return;
-
-    e.preventDefault();
-
-    const activeBtn   = document.querySelector('#video-list .video-cam-group:not(.collapsed) .video-item-btn.active');
-    const currentIdx  = activeBtn ? buttons.indexOf(activeBtn) : -1;
-    const nextIdx     = e.key === 'ArrowDown'
-        ? Math.min(currentIdx + 1, buttons.length - 1)
-        : Math.max(currentIdx - 1, 0);
-
-    buttons[nextIdx].click();
-    buttons[nextIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 });
 
 // ================================================

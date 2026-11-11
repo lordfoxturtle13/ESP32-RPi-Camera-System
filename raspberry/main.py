@@ -10,7 +10,6 @@ import queue
 import os
 import secrets
 import shutil
-import re
 import unicodedata
 from datetime import datetime, timedelta
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -92,8 +91,6 @@ DEFAULT_STORAGE_SETTINGS = {"retention_days": 30, "min_free_percent": 10, "segme
 STORAGE_SETTING_RANGES   = {"retention_days": (0, 3650), "min_free_percent": (0, 50), "segment_minutes": (1, 120)}
 STORAGE_CHECK_INTERVAL_S = 60
 EVENT_LOG_MAX_BYTES      = 5 * 1024 * 1024  # E fölött új naplófájl kezdődik, és csak az előző marad meg
-VIDEOS_PER_PAGE          = 50
-MAX_VIDEOS_PER_PAGE      = 200
 # Ha be van kapcsolva, csak olyan helyre rögzítünk, ahol ez a fájl megvan. Így a kihúzott USB
 # helyett nem a rendszerkártya telik meg, ahová a csatolási pont mutat.
 ARCHIVE_MARKER_FILE      = ".orszem-archive"
@@ -189,7 +186,7 @@ camera_fps = {cam_id: load_camera_fps(cam_id, cam) for cam_id, cam in CAMERAS.it
 writer_threads = {}
 
 storage_settings = load_storage_settings(_config.get("storage"))
-# Sorosítja a törlést és a védett lista módosítását, és védi a készülő felvételek halmazát
+# Sorosítja a törlést, és védi a készülő felvételek halmazát
 _storage_lock = threading.Lock()
 active_recordings = set()  # A készülő vagy lezárás alatt álló felvételek relatív útvonala
 storage_state = {"problem": None, "write_error": None}
@@ -518,21 +515,14 @@ def run_storage_maintenance():
     if problem is None:
         try:
             with _storage_lock:
-                protected, newly_protected = storage.initialize_protected(ARCHIVE_DIR)
                 deleted, enough_space = storage.run_cleanup(
                     ARCHIVE_DIR, storage_settings["retention_days"], storage_settings["min_free_percent"],
-                    protected, set(active_recordings),
+                    set(active_recordings),
                 )
-            if newly_protected:
-                log_system_event(f"[TÁRHELY] {newly_protected} meglévő felvétel védett lett az első induláskor")
             for path, reason in deleted:
                 log_system_event(f"[AUTOMATIKUS TÖRLÉS] {path} ({reason})")
             if not enough_space:
                 problem = low_space_reason() or "Kevés a szabad hely."
-        except storage.ProtectedListError as e:
-            # Ha nem tudjuk, mi védett, inkább semmit nem törlünk
-            log.error(f"[TÁRHELY] A védett lista nem olvasható: {e}")
-            problem = "A védett felvételek listája sérült, ezért az automatikus törlés szünetel."
         except OSError as e:
             log.error(f"[TÁRHELY] A tároló nem érhető el: {e}")
             problem = "A felvételek tárolója nem érhető el."
@@ -540,8 +530,7 @@ def run_storage_maintenance():
     if problem and problem != storage_state["problem"]:
         log_system_event(f"[TÁRHELY] {problem}")
     storage_state["problem"] = problem
-    # A sérült lista nem akadályozza a rögzítést, a többi ok igen
-    if problem and not problem.startswith("A védett"):
+    if problem:
         stop_all_recordings(problem)
     return problem
 
@@ -697,7 +686,7 @@ def toggle_record(camera_id):
     if not recording_flags[camera_id]:
         # Indítás előtt friss állapot kell: lehet, hogy a törlés fel tud szabadítani helyet
         problem = run_storage_maintenance()
-        if problem and not problem.startswith("A védett"):
+        if problem:
             return jsonify({"error": problem}), 507
         storage_state["write_error"] = None
     recording_flags[camera_id] = not recording_flags[camera_id]
@@ -721,11 +710,6 @@ def status():
     return jsonify(payload)
 
 
-def read_protected():
-    """A védett felvételek halmaza. Hibás lista esetén ProtectedListError."""
-    return storage.load_protected(ARCHIVE_DIR) or set()
-
-
 def camera_label(camera_id):
     camera = CAMERAS.get(camera_id)
     return camera["name"] if camera else f"CAM{camera_id:02d}"
@@ -733,104 +717,18 @@ def camera_label(camera_id):
 
 @app.route("/api/videos")
 def list_videos():
-    """Felvételek lapozva, kamera és dátum szerint szűrve, a legújabbal kezdve."""
-    camera    = request.args.get("camera", type=int)
-    date_from = request.args.get("from", "")
-    date_to   = request.args.get("to", "")
-    page      = max(1, request.args.get("page", 1, type=int))
-    per_page  = min(MAX_VIDEOS_PER_PAGE, max(1, request.args.get("per_page", VIDEOS_PER_PAGE, type=int)))
-
-    for value in (date_from, date_to):
-        if value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            return jsonify({"error": "Hibás dátum"}), 400
-
-    try:
-        protected = read_protected()
-    except storage.ProtectedListError:
-        return jsonify({"error": "A védett felvételek listája sérült"}), 500
-
+    """Az összes felvétel, a legújabbal kezdve. A dátum és kamera szerinti csoportosítás a felület dolga."""
     with _storage_lock:
         active = set(active_recordings)
-    recordings = storage.scan_recordings(ARCHIVE_DIR, protected, active)
-    cameras    = sorted({r.camera for r in recordings})
-
-    def matches(recording):
-        date = recording.started.strftime("%Y-%m-%d")
-        return ((camera is None or recording.camera == camera)
-                and (not date_from or date >= date_from)
-                and (not date_to or date <= date_to))
-
-    filtered = [r for r in recordings if matches(r)]
-    pages    = max(1, (len(filtered) + per_page - 1) // per_page)
-    page     = min(page, pages)
-    start    = (page - 1) * per_page
-
-    return jsonify({
-        "items": [{
-            "path"     : r.path,
-            "camera"   : r.camera,
-            "date"     : r.started.strftime("%Y-%m-%d"),
-            "time"     : r.started.strftime("%H:%M:%S"),
-            "size"     : r.size,
-            "protected": r.protected,
-            "recording": r.active,
-        } for r in filtered[start:start + per_page]],
-        "total"  : len(filtered),
-        "page"   : page,
-        "pages"  : pages,
-        "cameras": [{"id": c, "name": camera_label(c)} for c in cameras],
-    })
-
-
-@app.route("/api/videos", methods=["DELETE"])
-def delete_video():
-    path = (request.get_json(silent=True) or {}).get("path")
-    if storage.parse_recording_path(path) is None:
-        return jsonify({"error": "Érvénytelen felvétel"}), 400
-    if not os.path.exists(os.path.join(ARCHIVE_DIR, *path.split("/"))):
-        return jsonify({"error": "A felvétel nem található"}), 404
-
-    try:
-        with _storage_lock:
-            if path in active_recordings:
-                return jsonify({"error": "A felvétel éppen készül"}), 409
-            if path in read_protected():
-                return jsonify({"error": "Védett felvétel nem törölhető, előbb vedd le a védelmet"}), 409
-            storage.delete_recording(ARCHIVE_DIR, path)
-    except storage.ProtectedListError:
-        return jsonify({"error": "A védett felvételek listája sérült"}), 500
-    except OSError as e:
-        log.error(f"[TÁRHELY] Nem sikerült törölni: {path}: {e}")
-        return jsonify({"error": "Nem sikerült törölni a felvételt"}), 500
-
-    log_system_event(f"[FELVÉTEL TÖRLÉSE] {request.remote_addr} törölte: {path}")
-    return jsonify({"success": True})
-
-
-@app.route("/api/videos/protect", methods=["POST"])
-def protect_video():
-    data      = request.get_json(silent=True) or {}
-    path      = data.get("path")
-    protected = data.get("protected")
-    if storage.parse_recording_path(path) is None or not isinstance(protected, bool):
-        return jsonify({"error": "Érvénytelen kérés"}), 400
-    if not os.path.exists(os.path.join(ARCHIVE_DIR, *path.split("/"))):
-        return jsonify({"error": "A felvétel nem található"}), 404
-
-    try:
-        with _storage_lock:
-            current = read_protected()
-            (current.add if protected else current.discard)(path)
-            storage.save_protected(ARCHIVE_DIR, current)
-    except storage.ProtectedListError:
-        return jsonify({"error": "A védett felvételek listája sérült"}), 500
-    except OSError as e:
-        log.error(f"[TÁRHELY] Nem sikerült menteni a védett listát: {e}")
-        return jsonify({"error": "Nem sikerült menteni"}), 500
-
-    action = "védetté tette" if protected else "levette a védelmet erről"
-    log_system_event(f"[VÉDELEM] {request.remote_addr} {action}: {path}")
-    return jsonify({"success": True, "protected": protected})
+    return jsonify([{
+        "path"       : r.path,
+        "camera"     : r.camera,
+        "camera_name": camera_label(r.camera),
+        "date"       : r.started.strftime("%Y-%m-%d"),
+        "time"       : r.started.strftime("%H:%M:%S"),
+        "size"       : r.size,
+        "recording"  : r.active,
+    } for r in storage.scan_recordings(ARCHIVE_DIR, active)])
 
 
 @app.route("/api/storage")
@@ -838,20 +736,16 @@ def storage_status():
     """Tárhely állapota és beállításai a felület számára."""
     try:
         usage = shutil.disk_usage(ARCHIVE_DIR)
-        protected = read_protected()
-    except storage.ProtectedListError:
-        return jsonify({"error": "A védett felvételek listája sérült"}), 500
     except OSError:
         return jsonify({"error": "A tároló nem érhető el"}), 503
 
-    recordings = storage.scan_recordings(ARCHIVE_DIR, protected)
+    recordings = storage.scan_recordings(ARCHIVE_DIR)
     return jsonify({
         "total"        : usage.total,
         "free"         : usage.free,
         "free_percent" : round(storage.free_percent(usage), 1),
         "archive_size" : sum(r.size for r in recordings),
         "recordings"   : len(recordings),
-        "protected"    : sum(1 for r in recordings if r.protected),
         "unmanaged"    : storage.count_unmanaged_videos(ARCHIVE_DIR),
         "alert"        : storage_state["write_error"] or storage_state["problem"],
         "settings"     : storage_settings,
