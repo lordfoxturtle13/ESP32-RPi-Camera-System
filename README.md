@@ -1,4 +1,4 @@
-# ŐRSzem — ESP32-RPi Kamera Rendszer
+# ESP32-RPi Kamera Rendszer
 
 Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver Raspberry Pi-n vagy bármilyen más, Dockert futtató gépen működik. A webfelület élő képet, H.264 felvételt, visszajátszást gyors tekeréssel és eseménynaplót biztosít. Kizárólag Tailscale-en keresztül, HTTPS-sel érhető el.
 
