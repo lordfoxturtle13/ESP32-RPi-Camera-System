@@ -1,4 +1,3 @@
-import atexit
 import signal
 import sys
 import cv2
@@ -9,18 +8,14 @@ import numpy as np
 import threading
 import queue
 import os
-import requests
-import ipaddress
 import secrets
 import shutil
 import re
 import unicodedata
-from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask.sessions import SecureCookieSessionInterface
 from flask import Flask, abort, render_template, Response, jsonify, send_from_directory, request, session, redirect, url_for
-from functools import wraps
 import bcrypt
 import imageio
 from waitress import serve
@@ -71,14 +66,10 @@ _auth     = _config["auth"]
 
 app.secret_key = _auth["secret_key"]
 
-MAX_RETRIES       = 5          # Ennyi sikertelen csatlakozás után áll "standby"-ba a kamera
 OPEN_TIMEOUT_MS   = 5000       # Ennyi ideig próbálkozunk egy kamera stream megnyitásával
-REC_W, REC_H      = 640, 480   # Alapértelmezett felbontás (ha a kamerához nincs megadva más)
+RETRY_DELAY_S     = 0.5        # Sikertelen csatlakozás után ennyit várunk a következő próbáig
+REC_W, REC_H      = 640, 480   # Az OSD méretezésének alapja és az offline kép mérete
 DEFAULT_FPS       = round(1000 / 150, 2)  # Alapértelmezett képkockasebesség (150ms ≈ ~6.67 FPS)
-MIN_FPS, MAX_FPS  = 1, 30
-# A webes felületen választható felbontások
-RESOLUTIONS       = [(320, 240), (640, 480), (800, 600), (1280, 720), (1920, 1080)]
-MAX_NAME_LENGTH   = 40
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_BYTES  = 72       # A bcrypt ennél hosszabb jelszót csendben levágna
 # Belépési próbák korlátozása IP-címenként: a szabad próbák után egyre hosszabb a várakozás
@@ -86,16 +77,6 @@ LOGIN_FREE_ATTEMPTS = 5
 LOGIN_BASE_LOCK_S   = 30
 LOGIN_MAX_LOCK_S    = 3600
 LOGIN_FORGET_AFTER_S = 24 * 3600
-# Forgatás az óramutató járásával megegyezően, fokban
-ROTATE_CODES      = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-ROTATIONS         = [0, *ROTATE_CODES]
-# Kameratípusonként a stream és a LED címe az IP alapján (a LED opcionális)
-CAMERA_TYPES      = {
-    "esp32"  : {"url": "rtsp://{ip}:554/mjpeg/1", "led_url": "http://{ip}/flash"},
-    "luckfox": {"url": "rtsp://{ip}/live/0"},
-}
-STREAM_URL_SCHEMES = ("rtsp", "http", "https")  # A kamera URL nem mutathat pl. helyi fájlra
-LED_URL_SCHEMES    = ("http", "https")
 ARCHIVE_DIR       = os.environ.get("ARCHIVE_DIR", os.path.join(os.path.dirname(__file__), "archivum"))
 
 # Szoftveres kódoló: minden gépen működik. A hardveres h264_v4l2m2m Pi 3 B+-on hibás fájlokat készített.
@@ -165,8 +146,6 @@ def clear_password_attempts(ip):
 
 # config.json írását védi, hogy két egyidejű mentés ne írja felül egymást
 _config_lock = threading.Lock()
-# A kameralista módosításait sorosítja (pl. két hozzáadás ne kapjon azonos azonosítót)
-_cameras_lock = threading.Lock()
 
 
 def update_config(change):
@@ -177,53 +156,6 @@ def update_config(change):
         change(config_data)
         with open(_config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, indent=4, ensure_ascii=False)
-
-
-def validate_camera_settings(width, height, fps, rotation):
-    """Hibaüzenetet ad vissza, ha a beállítás érvénytelen, különben None-t."""
-    if (width, height) not in RESOLUTIONS:
-        return "Nem támogatott felbontás"
-    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not MIN_FPS <= fps <= MAX_FPS:
-        return f"Az FPS {MIN_FPS} és {MAX_FPS} között lehet"
-    if type(rotation) is not int or rotation not in ROTATIONS:
-        return "Nem támogatott forgatás"
-    return None
-
-
-def clean_camera_name(name):
-    """Felesleges szóközök és sortörések nélküli név, vagy None, ha érvénytelen."""
-    if not isinstance(name, str):
-        return None
-    name = " ".join(name.split())
-    return name if 0 < len(name) <= MAX_NAME_LENGTH else None
-
-
-def is_valid_url(url, schemes):
-    parsed = urlparse(url)
-    return parsed.scheme in schemes and bool(parsed.netloc)
-
-
-def url_in_use(url, except_id=None):
-    return any(cam["url"] == url for cam_id, cam in CAMERAS.items() if cam_id != except_id)
-
-
-def build_camera_entry(camera_type, address):
-    """Kamera címeinek összeállítása típus és IP/URL alapján. Visszaad: (címek, hibaüzenet)."""
-    address = address.strip() if isinstance(address, str) else ""
-
-    if camera_type == "custom":
-        if not is_valid_url(address, STREAM_URL_SCHEMES):
-            return None, "Érvénytelen URL (rtsp://, http:// vagy https:// kezdetű legyen)"
-        return {"url": address}, None
-
-    template = CAMERA_TYPES.get(camera_type)
-    if not template:
-        return None, "Ismeretlen kameratípus"
-    try:
-        ip = str(ipaddress.IPv4Address(address))
-    except ValueError:
-        return None, "Érvénytelen IP-cím"
-    return {key: value.format(ip=ip) for key, value in template.items()}, None
 
 
 def validate_storage_setting(key, value):
@@ -243,27 +175,17 @@ def load_storage_settings(saved):
     return settings
 
 
-def load_camera_settings(camera_id, cam):
-    """Kamera felbontása és FPS-e a configból; hibás érték esetén az alapértelmezés."""
-    width  = cam.get("width", REC_W)
-    height = cam.get("height", REC_H)
-    fps    = cam.get("fps", DEFAULT_FPS)
-    rotation = cam.get("rotation", 0)
-    error  = validate_camera_settings(width, height, fps, rotation)
-    if error:
-        log.warning(f"Kamera {camera_id}: hibás config ({error}), alapértelmezés használva")
-        return {"width": REC_W, "height": REC_H, "fps": DEFAULT_FPS, "rotation": 0}
-    return {"width": width, "height": height, "fps": fps, "rotation": rotation}
+def load_camera_fps(camera_id, cam):
+    """Kamera FPS-e a configból (opcionális); hibás érték esetén az alapértelmezés."""
+    fps = cam.get("fps", DEFAULT_FPS)
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or fps <= 0:
+        log.warning(f"Kamera {camera_id}: hibás FPS a configban, alapértelmezés használva")
+        return DEFAULT_FPS
+    return fps
 
 
-# Kameránkénti kép-beállítások — mentéskor a teljes dict cserélődik, a szálak menet közben olvassák
-camera_settings = {cam_id: load_camera_settings(cam_id, cam) for cam_id, cam in CAMERAS.items()}
-
-# A törölt kamerák azonosítója nem kerül újra kiosztásra, mert az archívum mappái ehhez kötődnek
-_next_camera_id = max(_config.get("next_camera_id", 0), max(CAMERAS, default=-1) + 1)
-
-# Kameránként egy esemény: beállítása leállítja a kamera szálait (törléskor)
-camera_stop_events = {}
+# A kamerák a config.json-ból jönnek, futás közben nem változnak
+camera_fps = {cam_id: load_camera_fps(cam_id, cam) for cam_id, cam in CAMERAS.items()}
 writer_threads = {}
 
 storage_settings = load_storage_settings(_config.get("storage"))
@@ -274,17 +196,14 @@ storage_state = {"problem": None, "write_error": None}
 
 # ==========================================
 # MEGOSZTOTT ÁLLAPOT
-# Fontos: mind a 4 dict itt van definiálva, a szálak indítása ELŐTT.
+# Fontos: minden dict itt van definiálva, a szálak indítása ELŐTT.
 # ==========================================
 
-# Kamerák hálózati állapota és újracsatlakozási számlálója
-camera_states = {cam_id: {"status": "offline", "retries": 0} for cam_id in CAMERAS}
+# Kamerák hálózati állapota: "online" vagy "offline"
+camera_status = {cam_id: "offline" for cam_id in CAMERAS}
 
 # Felvételi zászlók — Flask route állítja, writer_worker olvassa
 recording_flags = {cam_id: False for cam_id in CAMERAS}
-
-# LED állapotok — csak led_url-lel rendelkező kamerákhoz
-led_states = {cam_id: False for cam_id in CAMERAS if CAMERAS[cam_id].get("led_url")}
 
 # Képkocka sor a felvevő szálnak (maxsize=30 gátolja a RAM telítődést lassú írás esetén)
 write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
@@ -338,9 +257,7 @@ def write_event_line(line):
 def log_event(camera_id, message):
     """Kamera esemény naplózása az archívum events.log fájlba."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    camera = CAMERAS.get(camera_id)
-    label = camera["name"] if camera else "törölt"
-    line = f"{ts} | Kamera {camera_id} ({label}) | {message}\n"
+    line = f"{ts} | Kamera {camera_id} ({CAMERAS[camera_id]['name']}) | {message}\n"
     write_event_line(line)
     log.warning(f"[EVENT] {line.strip()}")
 
@@ -352,21 +269,17 @@ def log_system_event(message):
     log.info(f"[SYSTEM] {message}")
 
 
-def camera_worker(camera_id, stop):
-    # A dict-et tartjuk meg: a név és a cím menet közben változhat, törléskor pedig
-    # a szál még biztonságosan befejezheti az aktuális kört
-    camera = CAMERAS[camera_id]
+def camera_worker(camera_id):
+    camera   = CAMERAS[camera_id]
+    url      = camera["url"]
+    fps      = camera_fps[camera_id]
+    interval = 1 / fps
+    rotate   = camera.get("rotate_180") is True
+    # A cv2 betűkészlete nem ismeri az ékezeteket
+    name     = unicodedata.normalize("NFKD", camera["name"]).encode("ascii", "ignore").decode()
 
-    while not stop.is_set():
-        url = camera["url"]
-
-        # Standby: max újracsatlakozási kísérlet elérve, várunk amíg a reset endpoint nem nulláz
-        if camera_states[camera_id]["retries"] >= MAX_RETRIES:
-            camera_states[camera_id]["status"] = "standby"
-            latest_frames[camera_id] = FRAME_OFFLINE
-            time.sleep(1)
-            continue
-
+    # Folyamatos újrapróbálkozás: a kamera bármikor visszajöhet
+    while not server_stopping.is_set():
         # Az OpenCV egyszerre csak egy streamet nyit meg, ezért az időkorlát nélkül egy elérhetetlen
         # kamera a többi csatlakozását is feltartaná (alapból 30 mp-ig kísérletenként)
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS])
@@ -378,30 +291,25 @@ def camera_worker(camera_id, stop):
         # Első frame-mel teszteljük a kapcsolatot
         success, _ = cap.read()
         if not success:
-            camera_states[camera_id]["status"] = "offline"
-            camera_states[camera_id]["retries"] += 1
+            camera_status[camera_id] = "offline"
             latest_frames[camera_id] = FRAME_OFFLINE
             cap.release()
-            time.sleep(0.5)
+            time.sleep(RETRY_DELAY_S)
             continue
 
-        camera_states[camera_id]["status"] = "online"
-        camera_states[camera_id]["retries"] = 0
+        camera_status[camera_id] = "online"
         if recording_flags[camera_id]:
             log_event(camera_id, "Kapcsolat helyreállt — felvétel folytatódik")
 
-        # Törléskor vagy címváltáskor kilépünk, utóbbi esetben az új címre csatlakozunk
         next_frame = 0
-        while not stop.is_set() and camera["url"] == url:
+        while not server_stopping.is_set():
             # A streamet mindig a kamera ütemében olvassuk, különben lemaradnánk tőle, és a kép
             # lassítva, egyre nagyobb késéssel érkezne. Csak a beállított FPS-nek
             # megfelelő képkockákat dolgozzuk fel, a többit eldobjuk.
             if not cap.grab():
                 break  # Stream megszakadt → kilépés, újracsatlakozás következik
 
-            settings = camera_settings[camera_id]
-            interval = 1 / settings["fps"]
-            now      = time.monotonic()
+            now = time.monotonic()
             # A fél intervallum tűrés kell, hogy a kamera FPS-ével azonos beállításnál az
             # időzítés ingadozása miatt ne maradjon ki minden második képkocka
             if now < next_frame - interval / 2:
@@ -412,22 +320,14 @@ def camera_worker(camera_id, stop):
             if not success:
                 break
 
-            # Egységes felbontásra méretezés (kodek és dual-stream miatt szükséges)
-            width, height = settings["width"], settings["height"]
-            if frame.shape[1] != width or frame.shape[0] != height:
-                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
-
-            # A forgatás az OSD előtt történik, hogy a felirat egyenes maradjon.
-            # 90° és 270° esetén a kép álló lesz, a szélesség és a magasság felcserélődik.
-            rotate_code = ROTATE_CODES.get(settings["rotation"])
-            if rotate_code is not None:
-                frame = cv2.rotate(frame, rotate_code)
+            # Fejjel lefelé szerelt kamera (config.json: "rotate_180": true). A forgatás
+            # az OSD előtt történik, hogy a felirat egyenes maradjon.
+            if rotate:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
 
             # OSD: kettős szöveg (fekete árnyék + fehér előtér) a kontrasztért.
             # A méret a felbontással arányos, így nagy képen is olvasható marad.
             ts    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # A név menet közben is változhat; a cv2 betűkészlete nem ismeri az ékezeteket
-            name  = unicodedata.normalize("NFKD", camera["name"]).encode("ascii", "ignore").decode()
             osd   = f"{name} | {ts}"
             scale = frame.shape[1] / REC_W
             thick = max(1, round(2 * scale))
@@ -443,18 +343,15 @@ def camera_worker(camera_id, stop):
             # Felvétel aktív: képkocka átadása a writer_worker-nek
             if recording_flags[camera_id]:
                 try:
-                    write_queues[camera_id].put_nowait((frame.copy(), settings["fps"], settings["rotation"]))
+                    write_queues[camera_id].put_nowait((frame.copy(), fps))
                 except queue.Full:
                     pass  # Inkább kihagyunk egy képkockát, mint hogy blokkoljuk a szálat
 
         cap.release()
-        if recording_flags[camera_id] and camera["url"] == url:
+        if recording_flags[camera_id] and not server_stopping.is_set():
             log_event(camera_id, "Kapcsolat megszakadt felvétel közben")
-        if camera["url"] != url:
-            camera_states[camera_id] = {"status": "connecting", "retries": 0}
-            latest_frames[camera_id] = FRAME_OFFLINE
 
-    camera_states[camera_id]["status"] = "offline"
+    camera_status[camera_id] = "offline"
     latest_frames[camera_id] = FRAME_OFFLINE
 
 
@@ -517,21 +414,22 @@ def handle_recording_error(camera_id, error):
         log_event(camera_id, f"[FELVÉTEL] Írási hiba miatt leállt: {type(error).__name__}")
 
 
-def writer_worker(camera_id, stop):
+def writer_worker(camera_id):
+    stop        = server_stopping
     recording   = None  # A nyitott fájlpár: főstream + negyed felbontású al-stream a gyors tekeréshez
-    open_params = None  # A nyitott fájlok (szélesség, magasság, FPS, forgatás) adatai
+    open_size   = None  # A nyitott fájlok képmérete (szélesség, magasság)
 
     while True:
         try:
-            frame, fps, rotation = write_queues[camera_id].get(timeout=0.5)
+            frame, fps = write_queues[camera_id].get(timeout=0.5)
             height, width = frame.shape[:2]
 
-            # Beállítás változott felvétel közben: egy fájlon belül nem változhat a formátum,
-            # ezért lezárjuk a fájlokat, és a felvétel új fájlban folytatódik
-            if recording is not None and (width, height, fps, rotation) != open_params:
+            # A kamera felbontása megváltozott (pl. újracsatlakozás után): egy fájlon belül nem
+            # változhat a formátum, ezért lezárjuk a fájlokat, és a felvétel új fájlban folytatódik
+            if recording is not None and (width, height) != open_size:
                 close_recording_files(camera_id, recording)
                 recording = None
-                log.info(f"[REC SPLIT] Kamera {camera_id}: új beállítás, új fájl kezdődik.")
+                log.info(f"[REC SPLIT] Kamera {camera_id}: új képméret, új fájl kezdődik.")
 
             # Darabolás: az új fájl megnyílik, és csak utána zárul a régi a háttérben, mert a lezárás
             # másodpercekig tarthat, és ennyi ideig nem szabad képkockát veszíteni
@@ -548,7 +446,7 @@ def writer_worker(camera_id, stop):
             if recording_flags[camera_id] and recording is None:
                 recording = open_recording_files(camera_id, fps)
                 log.info(f"[REC START] Kamera {camera_id}: {recording['path']} ({width}x{height}, {fps} FPS)")
-                open_params    = (width, height, fps, rotation)
+                open_size      = (width, height)
                 rec_start      = time.monotonic()
                 frames_written = 0
 
@@ -664,16 +562,10 @@ def storage_worker():
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 
-def start_camera_threads(camera_id):
-    stop = camera_stop_events[camera_id] = threading.Event()
-    threading.Thread(target=camera_worker, args=(camera_id, stop), daemon=True).start()
-    writer = threading.Thread(target=writer_worker, args=(camera_id, stop), daemon=True)
-    writer_threads[camera_id] = writer
-    writer.start()
-
-
 for cam_id in CAMERAS:
-    start_camera_threads(cam_id)
+    threading.Thread(target=camera_worker, args=(cam_id,), daemon=True).start()
+    writer_threads[cam_id] = threading.Thread(target=writer_worker, args=(cam_id,), daemon=True)
+    writer_threads[cam_id].start()
 
 threading.Thread(target=storage_worker, daemon=True).start()
 
@@ -684,12 +576,10 @@ threading.Thread(target=storage_worker, daemon=True).start()
 
 def generate_web_stream(camera_id):
     """MJPEG stream: multipart/x-mixed-replace MIME típussal a böngésző folyamatosan frissíti a képet."""
-    while camera_id in CAMERAS and not server_stopping.is_set():  # Törölt kamera streamje véget ér
-        frame_bytes = latest_frames.get(camera_id)
-        if frame_bytes:
-            yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-        server_stopping.wait(1 / camera_settings[camera_id]["fps"])
+    while not server_stopping.is_set():
+        yield (b"--frame\r\n"
+               b"Content-Type: image/jpeg\r\n\r\n" + latest_frames[camera_id] + b"\r\n")
+        server_stopping.wait(1 / camera_fps[camera_id])
 
 
 @app.before_request
@@ -776,9 +666,7 @@ def change_password():
 @app.route("/")
 def index():
     log_system_event(f"[BELÉPÉS] {request.remote_addr} megnyitotta az oldalt")
-    return render_template("index.html", cameras=dict(CAMERAS), camera_settings=camera_settings,
-                           resolutions=RESOLUTIONS, rotations=ROTATIONS, min_fps=MIN_FPS, max_fps=MAX_FPS,
-                           max_name_length=MAX_NAME_LENGTH)
+    return render_template("index.html", cameras=CAMERAS)
 
 
 @app.route("/api/disconnect", methods=["POST"])
@@ -820,171 +708,14 @@ def toggle_record(camera_id):
     return jsonify({"camera_id": camera_id, "recording": is_recording})
 
 
-@app.route("/api/camera_settings/<int:camera_id>", methods=["POST"])
-def save_camera_settings(camera_id):
-    """Kamera nevének, címeinek, felbontásának és FPS-ének mentése — újraindítás nélkül életbe lép."""
-    data    = request.get_json(silent=True) or {}
-    width   = data.get("width")
-    height  = data.get("height")
-    fps     = data.get("fps")
-    rotation = data.get("rotation")
-    name    = clean_camera_name(data.get("name"))
-    url     = data.get("url").strip() if isinstance(data.get("url"), str) else ""
-    led_url = data.get("led_url").strip() if isinstance(data.get("led_url"), str) else ""
-
-    if not name:
-        return jsonify({"error": f"A név 1–{MAX_NAME_LENGTH} karakter lehet"}), 400
-    if not is_valid_url(url, STREAM_URL_SCHEMES):
-        return jsonify({"error": "Érvénytelen stream URL (rtsp://, http:// vagy https:// kezdetű legyen)"}), 400
-    if led_url and not is_valid_url(led_url, LED_URL_SCHEMES):
-        return jsonify({"error": "Érvénytelen LED URL (http:// vagy https:// kezdetű legyen)"}), 400
-    error = validate_camera_settings(width, height, fps, rotation)
-    if error:
-        return jsonify({"error": error}), 400
-
-    with _cameras_lock:
-        camera = CAMERAS.get(camera_id)
-        if camera is None:
-            return jsonify({"error": "Kamera nem található"}), 404
-        if url_in_use(url, except_id=camera_id):
-            return jsonify({"error": "Ez a cím már egy másik kameránál szerepel"}), 400
-
-        new_settings = {"width": width, "height": height, "fps": fps, "rotation": rotation}
-        url_changed  = url != camera["url"]
-        led_changed  = bool(led_url) != bool(camera.get("led_url"))
-
-        def change(config_data):
-            entry = config_data["cameras"][str(camera_id)]
-            entry.update(name=name, url=url, **new_settings)
-            entry.pop("led_url", None)
-            if led_url:
-                entry["led_url"] = led_url
-
-        update_config(change)
-        camera_settings[camera_id] = new_settings
-        camera["name"] = name
-
-        if led_url:
-            if led_url != camera.get("led_url"):
-                led_states[camera_id] = False
-            camera["led_url"] = led_url
-        else:
-            camera.pop("led_url", None)
-            led_states.pop(camera_id, None)
-
-        if url_changed:
-            # A szál észreveszi a változást; a nullázás a készenlétből is kihozza
-            camera["url"] = url
-            camera_states[camera_id] = {"status": "connecting", "retries": 0}
-
-    log_event(camera_id, f"[BEÁLLÍTÁS] {request.remote_addr} módosította: {width}x{height}, {fps} FPS, forgatás: {rotation}°")
-    if url_changed:
-        log_event(camera_id, f"[CÍM] {request.remote_addr} új címet adott meg: {url}")
-    return jsonify({"success": True, "name": name, "led_changed": led_changed, **new_settings})
-
-
-@app.route("/api/cameras", methods=["POST"])
-def add_camera():
-    """Új kamera felvétele: a configba mentődik, és újraindítás nélkül elindul."""
-    data = request.get_json(silent=True) or {}
-    name = clean_camera_name(data.get("name"))
-    if not name:
-        return jsonify({"error": f"A név 1–{MAX_NAME_LENGTH} karakter lehet"}), 400
-
-    entry, error = build_camera_entry(data.get("type"), data.get("address"))
-    if error:
-        return jsonify({"error": error}), 400
-
-    global _next_camera_id
-    with _cameras_lock:
-        if url_in_use(entry["url"]):
-            return jsonify({"error": "Ez a kamera már szerepel a listában"}), 400
-
-        camera_id = _next_camera_id
-        camera    = {"name": name, **entry}
-
-        def change(config_data):
-            config_data["cameras"][str(camera_id)] = camera
-            config_data["next_camera_id"] = camera_id + 1
-
-        update_config(change)
-        _next_camera_id = camera_id + 1
-
-        # Először a kiegészítő állapotok jönnek létre, mert a CAMERAS-ban már létezőnek
-        # látszó kamerát a route-ok azonnal használhatják
-        camera_settings[camera_id] = load_camera_settings(camera_id, camera)
-        camera_states[camera_id]   = {"status": "offline", "retries": 0}
-        recording_flags[camera_id] = False
-        write_queues[camera_id]    = queue.Queue(maxsize=30)
-        latest_frames[camera_id]   = FRAME_OFFLINE
-        if camera.get("led_url"):
-            led_states[camera_id]  = False
-        CAMERAS[camera_id]         = camera
-        start_camera_threads(camera_id)
-
-    log_event(camera_id, f"[ÚJ KAMERA] {request.remote_addr} hozzáadta: {entry['url']}")
-    return jsonify({"success": True, "camera_id": camera_id})
-
-
-@app.route("/api/cameras/<int:camera_id>", methods=["DELETE"])
-def delete_camera(camera_id):
-    """Kamera törlése a configból és a szálak leállítása. A felvételei az archívumban maradnak."""
-    with _cameras_lock:
-        if camera_id not in CAMERAS:
-            return jsonify({"error": "Kamera nem található"}), 404
-        if recording_flags[camera_id]:
-            return jsonify({"error": "A kamera éppen felvételt készít, előbb állítsd le"}), 409
-
-        def change(config_data):
-            del config_data["cameras"][str(camera_id)]
-            config_data["next_camera_id"] = _next_camera_id
-
-        update_config(change)
-        log_event(camera_id, f"[TÖRLÉS] {request.remote_addr} törölte a kamerát")
-        del CAMERAS[camera_id]
-        camera_stop_events.pop(camera_id).set()
-        writer_threads.pop(camera_id, None)
-
-    return jsonify({"success": True})
-
-
-@app.route("/api/led/<int:camera_id>/<int:state>", methods=["POST"])
-def toggle_led(camera_id, state):
-    """
-    ESP32-CAM flash LED vezérlés.
-    state=1 → bekapcsol (val=255), state=0 → kikapcsol (val=0).
-    Standard ESP32-CAM firmware endpoint: /control?var=flash&val=[0-255]
-    """
-    if camera_id not in CAMERAS:
-        return jsonify({"error": "Kamera nem található"}), 404
-
-    led_url = CAMERAS[camera_id].get("led_url")
-    if not led_url:
-        return jsonify({"error": "Ez a kamera nem támogatja az LED vezérlést"}), 400
-
-    try:
-        requests.get(f"{led_url}?v={255 if state else 0}", timeout=2)
-        led_states[camera_id] = bool(state)
-        return jsonify({"camera_id": camera_id, "led": bool(state)})
-    except requests.RequestException as e:
-        return jsonify({"error": f"Nem sikerült elérni a kamerát: {e}"}), 503
-
-
 @app.route("/status")
 def status():
     """Összesített állapot — a frontend 2 másodpercenként lekéri."""
     active_viewers[request.remote_addr] = time.time()
 
-    payload = {}
-    # list(): közben változhat a kameralista
-    for cam_id, camera in list(CAMERAS.items()):
-        # Szöveges kulcs, mert a JSON-rendezés nem bírja a vegyes kulcstípusokat
-        payload[str(cam_id)] = {
-            **camera_states[cam_id],
-            "recording": recording_flags[cam_id],
-            "led"      : led_states.get(cam_id, None),
-            "has_led"  : bool(camera.get("led_url")),
-        }
+    # Szöveges kulcs, mert a JSON-rendezés nem bírja a vegyes kulcstípusokat
+    payload = {str(cam_id): {"status": camera_status[cam_id], "recording": recording_flags[cam_id]}
+               for cam_id in CAMERAS}
     # A kamerák mellett ez az egy kulcs nem kameraazonosító, a frontend külön kezeli
     payload["storage_alert"] = storage_state["write_error"] or storage_state["problem"]
     return jsonify(payload)
@@ -1178,23 +909,12 @@ def list_events():
     return jsonify(list(reversed(lines[-200:])))
 
 
-@app.route("/api/reset/<int:camera_id>", methods=["POST"])
-def reset_camera(camera_id):
-    """Retries nullázása → camera_worker automatikusan újracsatlakozik."""
-    if camera_id not in CAMERAS:
-        return jsonify({"status": "error", "message": "Kamera nem található"}), 404
-    camera_states[camera_id]["retries"] = 0
-    camera_states[camera_id]["status"]  = "connecting"
-    return jsonify({"status": "success"})
-
 def _graceful_shutdown(signum, frame):
     """SIGTERM / SIGINT: a készülő felvételek lezárása, majd tiszta kilépés — a finally blokk logol."""
     server_stopping.set()
     # Lezárás nélkül az MP4 fájlnak nem készül el az indexe, és nem lehetne lejátszani
     for camera_id in list(recording_flags):
         recording_flags[camera_id] = False
-    for stop_event in list(camera_stop_events.values()):
-        stop_event.set()
     deadline = time.monotonic() + SHUTDOWN_WAIT_S
     for writer in list(writer_threads.values()):
         writer.join(max(0, deadline - time.monotonic()))

@@ -1,17 +1,8 @@
 {
     "cameras": {
-        "0": {
-            "name"    : "Nappali (ESP32)",
-            "url"     : "rtsp://192.168.1.XX:554/mjpeg/1",
-            "led_url" : "http://192.168.1.XX/flash",
-            "width"   : 640,
-            "height"  : 480,
-            "fps"     : 6.67
-        },
-        "1": { "name": "Konyha",  "url": "http://192.168.0.XXX:81/stream" },
-        "2": { "name": "Garázs",  "url": "http://192.168.0.XXX:81/stream" },
-        "3": { "name": "Kert",    "url": "http://192.168.0.XXX:81/stream" },
-        "4": { "name": "Bejárat", "url": "http://192.168.0.XXX:81/stream" }
+        "0": { "name": "Nappali (ESP32)", "url": "rtsp://192.168.1.XX:554/mjpeg/1", "fps": 6.67 },
+        "1": { "name": "Bejárat (Luckfox)", "url": "rtsp://192.168.1.XX/live/1", "fps": 5, "rotate_180": true },
+        "2": { "name": "Konyha", "url": "http://192.168.0.XXX:81/stream" }
     },
     "storage": {
         "retention_days"  : 30,

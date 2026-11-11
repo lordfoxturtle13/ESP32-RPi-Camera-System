@@ -5,9 +5,6 @@
 // Felvételi állapotok kameránként (szerver igazolja vissza, nem feltételezzük)
 const recordingStates = {};
 
-// LED állapotok kameránként
-const ledStates = {};
-
 // Éppen aktív nézet azonosítója
 let currentView = 'live';
 
@@ -44,10 +41,10 @@ async function fetchStatus() {
 /**
  * Egy kamera összes UI elemét frissíti a szerver állapota alapján.
  * @param {number} camId  - Kamera azonosítója
- * @param {object} state  - { status, retries, recording, led, has_led }
+ * @param {object} state  - { status, recording }
  */
 function updateCameraUI(camId, state) {
-    const { status, recording, led } = state;
+    const { status, recording } = state;
 
     // --- Állapotpontok frissítése ---
     // A kártyán és az oldalsávon lévő ponton is frissítjük az osztályokat
@@ -87,12 +84,6 @@ function updateCameraUI(camId, state) {
         applyRecordingUI(camId, recording);
     }
 
-    // --- LED állapot (csak ha van LED) ---
-    if (led !== null && ledStates[camId] !== led) {
-        ledStates[camId] = led;
-        const ledBtn = document.getElementById(`led-btn-${camId}`);
-        if (ledBtn) ledBtn.classList.toggle('led-on', led);
-    }
 }
 
 /** Kamera állapot string → CSS class */
@@ -184,46 +175,6 @@ function applyRecordingUI(cameraId, isRecording) {
 
     if (card)      card.classList.toggle('is-recording', isRecording);
     if (indicator) indicator.classList.toggle('visible', isRecording);
-}
-
-// ================================================
-// LED VEZÉRLÉS (ESP32-CAM)
-// ================================================
-
-/**
- * A kamera flash LED-jét kapcsolja ki/be.
- * A Flask /api/led endpoint közvetíti a parancsot az ESP32-nek.
- */
-async function toggleLED(cameraId) {
-    const newState = !ledStates[cameraId];
-
-    try {
-        const resp = await fetch(`/api/led/${cameraId}/${newState ? 1 : 0}`, { method: 'POST' });
-        const data = await resp.json();
-
-        if (data.led !== undefined) {
-            ledStates[cameraId] = data.led;
-            const btn = document.getElementById(`led-btn-${cameraId}`);
-            if (btn) btn.classList.toggle('led-on', data.led);
-        }
-    } catch (err) {
-        console.error('[LED] Hiba az LED vezérléskor:', err);
-    }
-}
-
-// ================================================
-// KAMERA ÚJRACSATLAKOZTATÁS
-// ================================================
-
-/**
- * A szerver oldalon nullázza a retries számlálót → camera_worker újracsatlakozik.
- */
-async function resetCamera(cameraId) {
-    try {
-        await fetch(`/api/reset/${cameraId}`, { method: 'POST' });
-    } catch (err) {
-        console.error('[RESET] Hiba:', err);
-    }
 }
 
 // ================================================
@@ -864,114 +815,6 @@ async function loadEvents(btn) {
 
     } catch (err) {
         list.innerHTML = '<p class="empty-msg">Hiba a napló betöltésekor.</p>';
-    }
-}
-
-// ================================================
-// KAMERA KÉP-BEÁLLÍTÁSOK (FELBONTÁS, FPS)
-// ================================================
-
-async function saveCameraSettings(event, cameraId) {
-    event.preventDefault();
-
-    const [width, height] = document.getElementById(`cam-res-${cameraId}`).value.split('x').map(Number);
-    const fps  = Number(document.getElementById(`cam-fps-${cameraId}`).value);
-    const name = document.getElementById(`cam-name-${cameraId}`).value;
-    const url  = document.getElementById(`cam-url-${cameraId}`).value;
-    const led_url = document.getElementById(`cam-led-${cameraId}`).value;
-    const rotation = Number(document.getElementById(`cam-rot-${cameraId}`).value);
-    const msg  = document.getElementById(`cam-msg-${cameraId}`);
-
-    msg.className = 'pw-msg';
-
-    try {
-        const resp = await fetch(`/api/camera_settings/${cameraId}`, {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({ name, url, led_url, width, height, fps, rotation }),
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            // A LED gombot a szerver rendereli, ezért ilyenkor újratöltjük az oldalt
-            if (data.led_changed) {
-                location.reload();
-                return;
-            }
-            document.querySelectorAll(`[data-cam-name="${cameraId}"]`).forEach(el => {
-                el.textContent = data.name;
-            });
-            msg.textContent = 'Mentve, a beállítás életbe lépett.';
-            msg.classList.add('pw-msg-ok');
-        } else {
-            msg.textContent = data.error || 'Hiba történt.';
-            msg.classList.add('pw-msg-error');
-        }
-    } catch (err) {
-        msg.textContent = 'Hálózati hiba.';
-        msg.classList.add('pw-msg-error');
-    }
-}
-
-async function deleteCamera(cameraId) {
-    const name = document.getElementById(`cam-name-${cameraId}`).value;
-    if (!confirm(`Biztosan törlöd ezt a kamerát: ${name}? A felvételei az archívumban maradnak.`)) return;
-
-    const msg = document.getElementById(`cam-msg-${cameraId}`);
-    msg.className = 'pw-msg';
-
-    try {
-        const resp = await fetch(`/api/cameras/${cameraId}`, { method: 'DELETE' });
-        const data = await resp.json();
-
-        if (data.success) {
-            location.reload();
-        } else {
-            msg.textContent = data.error || 'Hiba történt.';
-            msg.classList.add('pw-msg-error');
-        }
-    } catch (err) {
-        msg.textContent = 'Hálózati hiba.';
-        msg.classList.add('pw-msg-error');
-    }
-}
-
-/** Egyéb típusnál teljes URL kell, a többinél elég az IP-cím. */
-function updateNewCameraAddress() {
-    const isCustom = document.getElementById('new-cam-type').value === 'custom';
-    document.getElementById('new-cam-address-label').textContent = isCustom ? 'Stream URL' : 'IP-cím';
-    document.getElementById('new-cam-address').placeholder =
-        isCustom ? 'rtsp://192.168.1.100/stream' : '192.168.1.100';
-}
-
-async function addCamera(event) {
-    event.preventDefault();
-
-    const msg = document.getElementById('new-cam-msg');
-    msg.className = 'pw-msg';
-
-    try {
-        const resp = await fetch('/api/cameras', {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({
-                name   : document.getElementById('new-cam-name').value,
-                type   : document.getElementById('new-cam-type').value,
-                address: document.getElementById('new-cam-address').value,
-            }),
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            // Az új kamera kártyáit a szerver rendereli, ezért újratöltjük az oldalt
-            location.reload();
-        } else {
-            msg.textContent = data.error || 'Hiba történt.';
-            msg.classList.add('pw-msg-error');
-        }
-    } catch (err) {
-        msg.textContent = 'Hálózati hiba.';
-        msg.classList.add('pw-msg-error');
     }
 }
 
