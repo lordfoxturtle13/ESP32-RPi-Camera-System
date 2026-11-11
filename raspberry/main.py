@@ -8,12 +8,10 @@ import numpy as np
 import threading
 import queue
 import os
-import secrets
 import shutil
 import unicodedata
 from datetime import datetime, timedelta
 from werkzeug.middleware.proxy_fix import ProxyFix
-from flask.sessions import SecureCookieSessionInterface
 from flask import Flask, abort, render_template, Response, jsonify, send_from_directory, request, session, redirect, url_for
 import bcrypt
 import imageio
@@ -24,23 +22,16 @@ import storage
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # Statikus fájlok (CSS, JS) nem cache-elődnek
 
-# Alapból csak a saját gépen figyel: a külső elérést a HTTPS proxy (tailscale serve) adja
+# Csak a saját gépen figyel: a rendszer kizárólag a Tailscale HTTPS proxyján (tailscale serve)
+# keresztül érhető el. A konténerben 0.0.0.0, ott a docker-compose köti a portot a 127.0.0.1-hez.
 HOST = os.environ.get("HOST", "127.0.0.1")
 
-# A proxy mögött a valódi látogató címe az X-Forwarded-For fejlécben érkezik. Csak akkor bízunk
-# benne, ha a szerver közvetlenül nem érhető el kívülről, különben a fejléc hamisítható lenne.
-if os.environ.get("TRUST_PROXY", "1" if HOST == "127.0.0.1" else "0") == "1":
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+# A proxy mögött a valódi látogató címe az X-Forwarded-For fejlécben érkezik. Ebben azért
+# bízhatunk, mert a szerver közvetlenül nem érhető el, csak a proxyn át.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
-
-class ProxyAwareSessionInterface(SecureCookieSessionInterface):
-    """A süti Secure jelölést kap HTTPS-en, de a http://localhost elérés is működik marad."""
-
-    def get_cookie_secure(self, app):
-        return request.is_secure
-
-
-app.session_interface = ProxyAwareSessionInterface()
+# A munkamenet-süti csak HTTPS-en utazik (a böngészők a http://localhost-ot is biztonságosnak veszik)
+app.config["SESSION_COOKIE_SECURE"]   = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Idegen oldalról küldött POST nem kapja meg a sütit
 app.permanent_session_lifetime = timedelta(days=7)  # Használat közben megújul
 
@@ -60,7 +51,6 @@ with open(_config_path, encoding="utf-8") as _f:
     _config = json.load(_f)
 
 CAMERAS   = {int(k): v for k, v in _config["cameras"].items()}
-_ssl      = _config.get("ssl")
 _auth     = _config["auth"]
 
 app.secret_key = _auth["secret_key"]
@@ -69,13 +59,10 @@ OPEN_TIMEOUT_MS   = 5000       # Ennyi ideig próbálkozunk egy kamera stream me
 RETRY_DELAY_S     = 0.5        # Sikertelen csatlakozás után ennyit várunk a következő próbáig
 REC_W, REC_H      = 640, 480   # Az OSD méretezésének alapja és az offline kép mérete
 DEFAULT_FPS       = round(1000 / 150, 2)  # Alapértelmezett képkockasebesség (150ms ≈ ~6.67 FPS)
-MIN_PASSWORD_LENGTH = 12
-MAX_PASSWORD_BYTES  = 72       # A bcrypt ennél hosszabb jelszót csendben levágna
 # Belépési próbák korlátozása IP-címenként: a szabad próbák után egyre hosszabb a várakozás
 LOGIN_FREE_ATTEMPTS = 5
 LOGIN_BASE_LOCK_S   = 30
 LOGIN_MAX_LOCK_S    = 3600
-LOGIN_FORGET_AFTER_S = 24 * 3600
 ARCHIVE_DIR       = os.environ.get("ARCHIVE_DIR", os.path.join(os.path.dirname(__file__), "archivum"))
 
 # Szoftveres kódoló: minden gépen működik. A hardveres h264_v4l2m2m Pi 3 B+-on hibás fájlokat készített.
@@ -103,7 +90,7 @@ SERVER_SEND_BYTES        = 1
 # több másodperc késést okozna az élőképben. A videófájlokat ez nem érinti, azok nem ide kerülnek.
 SERVER_OUTBUF_HIGH_WATERMARK = 1024 * 1024
 
-# Sikertelen jelszópróbák IP-címenként: {ip: {"fails", "locked_until", "last"}}
+# Sikertelen jelszópróbák IP-címenként: {ip: {"fails", "locked_until"}}
 # Csak a memóriában él, újraindításkor törlődik.
 _login_attempts = {}
 _login_attempts_lock = threading.Lock()
@@ -116,15 +103,11 @@ def reserve_password_attempt(ip):
     """
     now = time.monotonic()
     with _login_attempts_lock:
-        for key in [k for k, v in _login_attempts.items() if now - v["last"] > LOGIN_FORGET_AFTER_S]:
-            del _login_attempts[key]
-
-        entry = _login_attempts.setdefault(ip, {"fails": 0, "locked_until": 0, "last": now})
+        entry = _login_attempts.setdefault(ip, {"fails": 0, "locked_until": 0})
         if now < entry["locked_until"]:
             return int(entry["locked_until"] - now) + 1
 
         entry["fails"] += 1
-        entry["last"]   = now
         if entry["fails"] >= LOGIN_FREE_ATTEMPTS:
             extra = entry["fails"] - LOGIN_FREE_ATTEMPTS
             entry["locked_until"] = now + min(LOGIN_MAX_LOCK_S, LOGIN_BASE_LOCK_S * 2 ** min(extra, 16))
@@ -134,20 +117,6 @@ def reserve_password_attempt(ip):
 def clear_password_attempts(ip):
     with _login_attempts_lock:
         _login_attempts.pop(ip, None)
-
-
-# config.json írását védi, hogy két egyidejű mentés ne írja felül egymást
-_config_lock = threading.Lock()
-
-
-def update_config(change):
-    """config.json beolvasása, módosítása a kapott függvénnyel, majd visszaírása."""
-    with _config_lock:
-        with open(_config_path, encoding="utf-8") as f:
-            config_data = json.load(f)
-        change(config_data)
-        with open(_config_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=4, ensure_ascii=False)
 
 
 def load_storage_settings(saved):
@@ -196,11 +165,6 @@ recording_flags = {cam_id: False for cam_id in CAMERAS}
 
 # Képkocka sor a felvevő szálnak (maxsize=30 gátolja a RAM telítődést lassú írás esetén)
 write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
-
-# Aktív nézők: {ip: utolsó_látott_timestamp} — /status polling alapján frissül
-active_viewers = {}
-VIEWER_TIMEOUT = 10  # másodperc: ennyi ideig számít aktívnak az utoljára látott IP
-
 
 def generate_dark_frame():
     """
@@ -602,51 +566,10 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route("/api/change_password", methods=["POST"])
-def change_password():
-    data       = request.get_json() or {}
-    current_pw = data.get("current", "")
-    new_pw     = data.get("new", "")
-
-    wait = reserve_password_attempt(request.remote_addr)
-    if wait:
-        return jsonify({"error": f"Túl sok próba, várj {wait} másodpercet"}), 429
-    if not bcrypt.checkpw(current_pw.encode(), _auth["password_hash"].encode()):
-        log_system_event(f"[HIBÁS JELSZÓ] {request.remote_addr} (jelszócsere)")
-        return jsonify({"error": "Hibás jelenlegi jelszó"}), 400
-    clear_password_attempts(request.remote_addr)
-
-    if len(new_pw) < MIN_PASSWORD_LENGTH:
-        return jsonify({"error": f"Az új jelszó legalább {MIN_PASSWORD_LENGTH} karakter legyen"}), 400
-    if len(new_pw.encode()) > MAX_PASSWORD_BYTES:
-        return jsonify({"error": f"Az új jelszó legfeljebb {MAX_PASSWORD_BYTES} bájt lehet"}), 400
-
-    new_hash   = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt(12)).decode()
-    new_secret = secrets.token_hex(32)
-
-    update_config(lambda config_data: config_data["auth"].update(password_hash=new_hash, secret_key=new_secret))
-
-    # Az új kulccsal minden korábbi belépés érvénytelen lesz: a többi eszköz kilép,
-    # ez a munkamenet pedig az új kulccsal aláírva marad érvényes
-    _auth["password_hash"] = new_hash
-    _auth["secret_key"]    = new_secret
-    app.secret_key         = new_secret
-    session.modified       = True
-
-    log_system_event(f"[JELSZÓCSERE] {request.remote_addr} megváltoztatta a jelszót, a többi eszköz kilépett")
-    return jsonify({"success": True})
-
-
 @app.route("/")
 def index():
     log_system_event(f"[BELÉPÉS] {request.remote_addr} megnyitotta az oldalt")
     return render_template("index.html", cameras=CAMERAS)
-
-
-@app.route("/api/disconnect", methods=["POST"])
-def disconnect():
-    log_system_event(f"[KILÉPÉS] {request.remote_addr} elhagyta az oldalt")
-    return "", 204
 
 
 @app.route("/video_feed/<int:camera_id>")
@@ -685,8 +608,6 @@ def toggle_record(camera_id):
 @app.route("/status")
 def status():
     """Összesített állapot — a frontend 2 másodpercenként lekéri."""
-    active_viewers[request.remote_addr] = time.time()
-
     # Szöveges kulcs, mert a JSON-rendezés nem bírja a vegyes kulcstípusokat
     payload = {str(cam_id): {"status": camera_status[cam_id], "recording": recording_flags[cam_id]}
                for cam_id in CAMERAS}
@@ -729,14 +650,6 @@ def serve_video(filepath):
     return send_from_directory(ARCHIVE_DIR, filepath, as_attachment=download)
 
 
-@app.route("/api/viewers")
-def list_viewers():
-    """Jelenleg az oldalon lévő IP-k (utolsó 10 mp-ben pingelt /status)."""
-    now = time.time()
-    current = [ip for ip, last in active_viewers.items() if now - last < VIEWER_TIMEOUT]
-    return jsonify(current)
-
-
 @app.route("/api/events")
 def list_events():
     """Eseménynapló utolsó 200 sora — legújabb először."""
@@ -764,13 +677,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  _graceful_shutdown)
     log_system_event("[SZERVER] Elindult")
     try:
-        if _ssl:
-            # A Waitress nem kezel HTTPS-t, ezért a saját tanúsítványos módban a Flask szervere fut
-            app.run(host=HOST, port=SERVER_PORT, debug=False, threaded=True,
-                    ssl_context=(_ssl["cert"], _ssl["key"]))
-        else:
-            # A proxy fejléceit a Waitress alapból eldobná, a megbízhatóságukról a ProxyFix dönt
-            serve(app, host=HOST, port=SERVER_PORT, threads=SERVER_THREADS, send_bytes=SERVER_SEND_BYTES,
-                  outbuf_high_watermark=SERVER_OUTBUF_HIGH_WATERMARK, clear_untrusted_proxy_headers=False)
+        # A proxy fejléceit a Waitress alapból eldobná, azokat a ProxyFix dolgozza fel
+        serve(app, host=HOST, port=SERVER_PORT, threads=SERVER_THREADS, send_bytes=SERVER_SEND_BYTES,
+              outbuf_high_watermark=SERVER_OUTBUF_HIGH_WATERMARK, clear_untrusted_proxy_headers=False)
     finally:
         log_system_event("[SZERVER] Leállt")

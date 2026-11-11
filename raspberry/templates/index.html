@@ -196,34 +196,6 @@
 
                 <div class="events-panel">
                     <div class="events-header">
-                        <h2 class="panel-title" style="margin:0">Aktív nézők</h2>
-                        <button class="btn-icon" onclick="loadViewers(this)" title="Frissítés">
-                            <svg viewBox="0 0 20 20" fill="none">
-                                <path d="M4 10a6 6 0 1 0 1-3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                                <path d="M4 4v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div id="viewers-list" class="events-list">
-                        <p class="empty-msg">Betöltés...</p>
-                    </div>
-                </div>
-
-                <div class="events-panel">
-                    <div class="events-header">
-                        <h2 class="panel-title" style="margin:0">Jelszó módosítása</h2>
-                    </div>
-                    <div class="password-form">
-                        <input type="password" id="pw-current" placeholder="Jelenlegi jelszó" class="login-input">
-                        <input type="password" id="pw-new"     placeholder="Új jelszó (min. 12 karakter)" class="login-input">
-                        <input type="password" id="pw-confirm" placeholder="Új jelszó mégegyszer" class="login-input">
-                        <p id="pw-msg" class="pw-msg hidden"></p>
-                        <button class="login-btn" onclick="changePassword()">Mentés</button>
-                    </div>
-                </div>
-
-                <div class="events-panel">
-                    <div class="events-header">
                         <h2 class="panel-title" style="margin:0">Kijelentkezés</h2>
                     </div>
                     <form method="POST" action="/logout">

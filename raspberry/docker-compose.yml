@@ -5,12 +5,11 @@ services:
     build: .
     restart: always
     ports:
-      # Alapból csak a saját gépről érhető el, a külső elérést a tailscale serve adja
-      - "${BIND_ADDRESS:-127.0.0.1}:5000:5000"
+      # Csak a saját gépről érhető el, kívülről kizárólag a tailscale serve HTTPS proxyján át
+      - "127.0.0.1:5000:5000"
     environment:
       # A konténeren belül minden címen figyel, a tényleges korlát a fenti port beállítás
       - HOST=0.0.0.0
-      - TRUST_PROXY=${TRUST_PROXY:-1}
     volumes:
       - ./config.json:/app/config.json
       # A felvételek helye az ARCHIVE_PATH változóval módosítható

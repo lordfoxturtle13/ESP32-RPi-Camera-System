@@ -8,9 +8,6 @@ const recordingStates = {};
 // Éppen aktív nézet azonosítója
 let currentView = 'live';
 
-// Auto-refresh timer a Settings nézethez
-let settingsRefreshTimer = null;
-
 
 // ================================================
 // STÁTUSZ POLLING
@@ -201,14 +198,7 @@ function showView(viewName) {
     // Archívum betöltése, ha arra váltunk
     if (viewName === 'archive') loadVideoList();
 
-    // Eseménynapló + nézők: auto-refresh indítása/leállítása
-    if (viewName === 'settings') {
-        loadViewers();
-        loadEvents();
-        settingsRefreshTimer = setInterval(() => loadViewers(), 5000);
-    } else {
-        clearInterval(settingsRefreshTimer);
-    }
+    if (viewName === 'settings') loadEvents();
 
     // Lejátszó leállítása, ha elhagyjuk az archívumot
     if (viewName !== 'archive') {
@@ -534,15 +524,6 @@ document.addEventListener('visibilitychange', () => {
     else updateStreams();
 });
 
-// Oldal elhagyásakor kilépés naplózása (sendBeacon megbízható, fetch nem)
-// pagehide: iOS Safari-n is megbízható (beforeunload iOS-en nem tüzel)
-window.addEventListener('pagehide', () => {
-    navigator.sendBeacon('/api/disconnect');
-});
-window.addEventListener('beforeunload', () => {
-    navigator.sendBeacon('/api/disconnect');
-});
-
 // ================================================
 // SEGÉDFÜGGVÉNY — Spinner animáció gombokhoz
 // ================================================
@@ -553,33 +534,6 @@ function spinBtn(btn) {
     void btn.offsetWidth; // reflow hogy az animáció újrainduljon
     btn.classList.add('spinning');
     btn.addEventListener('animationend', () => btn.classList.remove('spinning'), { once: true });
-}
-
-// ================================================
-// AKTÍV NÉZŐK
-// ================================================
-
-async function loadViewers(btn) {
-    spinBtn(btn);
-    const list = document.getElementById('viewers-list');
-    if (!list) return;
-
-    try {
-        const resp = await fetch('/api/viewers');
-        const ips  = await resp.json();
-
-        if (ips.length === 0) {
-            list.innerHTML = '<p class="empty-msg">Jelenleg senki nem néz.</p>';
-            return;
-        }
-
-        list.innerHTML = ips.map(ip =>
-            `<p class="event-entry event-viewer">${ip}</p>`
-        ).join('');
-
-    } catch (err) {
-        list.innerHTML = '<p class="empty-msg">Hiba a nézők betöltésekor.</p>';
-    }
 }
 
 // ================================================
@@ -615,47 +569,5 @@ async function loadEvents(btn) {
 
     } catch (err) {
         list.innerHTML = '<p class="empty-msg">Hiba a napló betöltésekor.</p>';
-    }
-}
-
-// ================================================
-// JELSZÓ MÓDOSÍTÁS
-// ================================================
-
-async function changePassword() {
-    const current = document.getElementById('pw-current').value;
-    const newPw   = document.getElementById('pw-new').value;
-    const confirm = document.getElementById('pw-confirm').value;
-    const msg     = document.getElementById('pw-msg');
-
-    msg.className = 'pw-msg';
-
-    if (newPw !== confirm) {
-        msg.textContent = 'A két új jelszó nem egyezik.';
-        msg.classList.add('pw-msg-error');
-        return;
-    }
-
-    try {
-        const resp = await fetch('/api/change_password', {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({ current, new: newPw }),
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            msg.textContent = 'Jelszó sikeresen megváltoztatva.';
-            msg.classList.add('pw-msg-ok');
-            document.getElementById('pw-current').value = '';
-            document.getElementById('pw-new').value     = '';
-            document.getElementById('pw-confirm').value = '';
-        } else {
-            msg.textContent = data.error || 'Hiba történt.';
-            msg.classList.add('pw-msg-error');
-        }
-    } catch (err) {
-        msg.textContent = 'Hálózati hiba.';
-        msg.classList.add('pw-msg-error');
     }
 }

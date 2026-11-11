@@ -1,7 +1,6 @@
-# Raspberry Pi kiegészítés: USB-s archívum, Tailscale tanúsítványok.
+# Raspberry Pi kiegészítés: a felvételek az USB-re csatolt archivum mappába kerülnek.
 # Használata: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build
 services:
   camera-server:
     volumes:
       - ./archivum:/app/archivum
-      - /etc/tailscale-certs:/etc/tailscale-certs:ro
