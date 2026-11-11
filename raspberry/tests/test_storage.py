@@ -1,5 +1,4 @@
 """Futtatás a raspberry mappából: python -m unittest discover -s tests"""
-import json
 import os
 import sys
 import tempfile
@@ -33,8 +32,8 @@ class StorageTestCase(unittest.TestCase):
     def exists(self, path):
         return os.path.exists(os.path.join(self.archive, *path.split("/")))
 
-    def cleanup(self, retention=30, min_free=0, protected=(), active=(), usage=None):
-        return storage.run_cleanup(self.archive, retention, min_free, set(protected), set(active), now=NOW,
+    def cleanup(self, retention=30, min_free=0, active=(), usage=None):
+        return storage.run_cleanup(self.archive, retention, min_free, set(active), now=NOW,
                                    usage_fn=usage or (lambda _: Usage(100, 50, 50)))
 
 
@@ -58,43 +57,17 @@ class ScanTests(StorageTestCase):
     def test_newest_first_with_flags_and_both_sizes(self):
         old = self.add("2026-10-01")
         new = self.add("2026-11-01", camera=1, size=20)
-        result = storage.scan_recordings(self.archive, protected={old}, active={new})
+        result = storage.scan_recordings(self.archive, active={new})
         self.assertEqual([r.path for r in result], [new, old])
-        self.assertEqual((result[0].size, result[0].active, result[0].protected), (40, True, False))
-        self.assertEqual((result[1].size, result[1].active, result[1].protected), (20, False, True))
+        self.assertEqual((result[0].size, result[0].active), (40, True))
+        self.assertEqual((result[1].size, result[1].active), (20, False))
 
-    def test_ignores_unmanaged_files_and_counts_legacy_videos(self):
+    def test_ignores_unmanaged_files(self):
         with open(os.path.join(self.archive, "cam_0_20260429_182656_main.mp4"), "wb"):
             pass
         with open(os.path.join(self.archive, "events.log"), "wb"):
             pass
         self.assertEqual(storage.scan_recordings(self.archive), [])
-        self.assertEqual(storage.count_unmanaged_videos(self.archive), 1)
-
-
-class ProtectedListTests(StorageTestCase):
-    def test_first_start_protects_existing_recordings_only_once(self):
-        first = self.add()
-        protected, added = storage.initialize_protected(self.archive)
-        self.assertEqual((protected, added), ({first}, 1))
-
-        second = self.add(time="130000")
-        protected, added = storage.initialize_protected(self.archive)
-        self.assertEqual((protected, added), ({first}, 0))
-        self.assertNotIn(second, protected)
-
-    def test_corrupt_list_raises_instead_of_empty_list(self):
-        for content in ("{nem json", '{"a": 1}', "[1, 2]"):
-            with open(os.path.join(self.archive, storage.PROTECTED_FILE), "w", encoding="utf-8") as f:
-                f.write(content)
-            with self.assertRaises(storage.ProtectedListError):
-                storage.load_protected(self.archive)
-
-    def test_save_leaves_no_temp_file(self):
-        storage.save_protected(self.archive, {"b", "a"})
-        self.assertEqual(os.listdir(self.archive), [storage.PROTECTED_FILE])
-        with open(os.path.join(self.archive, storage.PROTECTED_FILE), encoding="utf-8") as f:
-            self.assertEqual(json.load(f), ["a", "b"])
 
 
 class DeleteTests(StorageTestCase):
@@ -134,13 +107,12 @@ class CleanupTests(StorageTestCase):
         self.assertEqual(self.cleanup(retention=0), ([], True))
         self.assertTrue(self.exists(path))
 
-    def test_protected_and_active_survive_every_rule(self):
-        protected = self.add("2020-01-01")
-        active    = self.add("2020-01-02")
-        deleted, ok = self.cleanup(min_free=99, protected={protected}, active={active})
+    def test_active_survives_every_rule(self):
+        active = self.add("2020-01-02")
+        deleted, ok = self.cleanup(min_free=99, active={active})
         self.assertEqual(deleted, [])
         self.assertFalse(ok)
-        self.assertTrue(self.exists(protected) and self.exists(active))
+        self.assertTrue(self.exists(active))
 
     def test_legacy_root_files_survive_every_rule(self):
         legacy = os.path.join(self.archive, "cam_0_20200101_120000_main.mp4")
@@ -175,8 +147,8 @@ class CleanupTests(StorageTestCase):
         self.assertTrue(self.exists(newest))
 
     def test_reports_low_space_when_nothing_can_be_deleted(self):
-        protected = self.add()
-        deleted, ok = self.cleanup(min_free=10, protected={protected}, usage=lambda _: Usage(100, 95, 5))
+        active = self.add()
+        deleted, ok = self.cleanup(min_free=10, active={active}, usage=lambda _: Usage(100, 95, 5))
         self.assertEqual(deleted, [])
         self.assertFalse(ok)
 

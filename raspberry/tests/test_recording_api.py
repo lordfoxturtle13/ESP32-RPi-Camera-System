@@ -26,8 +26,7 @@ CONFIG = {
 }
 with open(os.path.join(TEMP, "config.json"), "w", encoding="utf-8") as config_file:
     json.dump(CONFIG, config_file)
-# A jelölőfájl-ellenőrzést a Pi-s beállítás bekapcsolja, ezt a tesztek maguk kapcsolgatják
-os.environ.update(CONFIG_PATH=os.path.join(TEMP, "config.json"), ARCHIVE_DIR=ARCHIVE, REQUIRE_ARCHIVE_MARKER="0")
+os.environ.update(CONFIG_PATH=os.path.join(TEMP, "config.json"), ARCHIVE_DIR=ARCHIVE)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main    # noqa: E402
@@ -55,7 +54,6 @@ class ApiTestCase(unittest.TestCase):
         for name in os.listdir(ARCHIVE):
             path = os.path.join(ARCHIVE, name)
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-        storage.save_protected(ARCHIVE, set())
         main.active_recordings.clear()
         main.storage_state.update(problem=None, write_error=None)
         main.storage_settings.update(main.DEFAULT_STORAGE_SETTINGS)
@@ -69,11 +67,23 @@ class ApiTestCase(unittest.TestCase):
 
 
 class AccessTests(ApiTestCase):
-    def test_every_storage_endpoint_requires_login(self):
+    def test_every_endpoint_requires_login(self):
         anonymous = main.app.test_client()
-        for method, url in (("get", "/api/videos"), ("delete", "/api/videos"), ("post", "/api/videos/protect"),
-                            ("get", "/api/storage"), ("post", "/api/storage/settings")):
-            self.assertEqual(getattr(anonymous, method)(url).status_code, 401, url)
+        for url in ("/api/videos", "/api/events", "/status", "/video_feed/0"):
+            self.assertEqual(anonymous.get(url).status_code, 401, url)
+        # Az oldal és a felvétel kapcsolója a belépéshez irányít, és nem indít felvételt
+        self.assertEqual(anonymous.get("/").status_code, 302)
+        self.assertEqual(anonymous.post("/toggle_record/0").status_code, 302)
+        self.assertFalse(main.recording_flags[0])
+
+    def test_session_cookie_is_https_only(self):
+        self.assertTrue(main.app.config["SESSION_COOKIE_SECURE"])
+
+    def test_removed_endpoints_are_gone(self):
+        for method, url in (("post", "/api/cameras"), ("post", "/api/led/0/1"), ("post", "/api/reset/0"),
+                            ("post", "/api/change_password"), ("get", "/api/viewers"), ("get", "/api/storage"),
+                            ("post", "/api/videos/protect"), ("delete", "/api/videos"), ("post", "/api/disconnect")):
+            self.assertIn(getattr(self.client, method)(url).status_code, (404, 405), url)
 
 
 class LiveStreamLimitTests(ApiTestCase):
@@ -102,74 +112,23 @@ class LiveStreamLimitTests(ApiTestCase):
 
 
 class ListTests(ApiTestCase):
-    def test_filters_and_pagination(self):
+    def test_lists_every_recording_newest_first_with_camera_name(self):
         add_recording("2026-10-30", camera=0)
         add_recording("2026-11-01", camera=0)
         newest = add_recording("2026-11-02", camera=1)
 
-        data = self.client.get("/api/videos").get_json()
-        self.assertEqual((data["total"], data["items"][0]["path"]), (3, newest))
-        self.assertEqual([c["id"] for c in data["cameras"]], [0, 1])
+        items = self.client.get("/api/videos").get_json()
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["path"], newest)
+        self.assertEqual((items[0]["date"], items[0]["time"]), ("2026-11-02", "12:00:00"))
+        # A configban nem szereplő kamera felvétele is listázódik, azonosítóval
+        self.assertEqual([i["camera_name"] for i in items], ["CAM01", "Teszt", "Teszt"])
+        self.assertEqual(items[0]["size"], 20)
 
-        self.assertEqual(self.client.get("/api/videos?camera=1").get_json()["total"], 1)
-        self.assertEqual(self.client.get("/api/videos?from=2026-11-01&to=2026-11-01").get_json()["total"], 1)
-
-        page = self.client.get("/api/videos?per_page=2&page=2").get_json()
-        self.assertEqual((page["pages"], page["page"], len(page["items"])), (2, 2, 1))
-        # A túl nagy oldalszám az utolsó oldalra esik vissza
-        self.assertEqual(self.client.get("/api/videos?per_page=2&page=99").get_json()["page"], 2)
-
-    def test_rejects_bad_date(self):
-        self.assertEqual(self.client.get("/api/videos?from=x").status_code, 400)
-
-    def test_legacy_root_files_are_only_counted(self):
+    def test_legacy_root_files_are_not_listed(self):
         with open(os.path.join(ARCHIVE, "cam_0_20260429_182656_main.mp4"), "wb"):
             pass
-        self.assertEqual(self.client.get("/api/videos").get_json()["total"], 0)
-        self.assertEqual(self.client.get("/api/storage").get_json()["unmanaged"], 1)
-
-
-class DeleteAndProtectTests(ApiTestCase):
-    def test_delete_removes_pair(self):
-        path = add_recording()
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 200)
-        self.assertFalse(self.exists(path))
-        self.assertFalse(self.exists(storage.sub_path(path)))
-
-    def test_protected_cannot_be_deleted_until_unprotected(self):
-        path = add_recording()
-        self.client.post("/api/videos/protect", json={"path": path, "protected": True})
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 409)
-        self.assertTrue(self.exists(path))
-        self.client.post("/api/videos/protect", json={"path": path, "protected": False})
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 200)
-
-    def test_active_recording_cannot_be_deleted(self):
-        path = add_recording()
-        main.active_recordings.add(path)
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 409)
-        self.assertTrue(self.exists(path))
-
-    def test_unmanaged_and_traversal_paths_rejected(self):
-        secret = os.path.join(TEMP, "config.json")
-        for path in ("../config.json", "2026-11-01/cam_0/../../../config.json", "events.log", "", None, 5):
-            self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 400, path)
-            self.assertEqual(self.client.post("/api/videos/protect", json={"path": path, "protected": True}).status_code,
-                             400, path)
-        self.assertTrue(os.path.exists(secret))
-
-    def test_missing_recording_is_not_found(self):
-        path = "2026-11-01/cam_0/cam_0_20261101_120000_main.mp4"
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 404)
-
-    def test_corrupt_protected_list_blocks_deletion(self):
-        path = add_recording()
-        with open(os.path.join(ARCHIVE, storage.PROTECTED_FILE), "w", encoding="utf-8") as f:
-            f.write("{nem json")
-        self.assertEqual(self.client.delete("/api/videos", json={"path": path}).status_code, 500)
-        main.storage_settings["retention_days"] = 1
-        self.assertIn("sérült", main.run_storage_maintenance())
-        self.assertTrue(self.exists(path))
+        self.assertEqual(self.client.get("/api/videos").get_json(), [])
 
 
 class DownloadTests(ApiTestCase):
@@ -199,34 +158,24 @@ class DownloadTests(ApiTestCase):
 
 
 class SettingsTests(ApiTestCase):
-    def test_saves_valid_values_to_config(self):
-        values = {"retention_days": 7, "min_free_percent": 0, "segment_minutes": 5}
-        self.assertEqual(self.client.post("/api/storage/settings", json=values).status_code, 200)
-        self.assertEqual({k: main.storage_settings[k] for k in values}, values)
-        with open(os.environ["CONFIG_PATH"], encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["storage"], values)
-
-    def test_rejects_invalid_values(self):
-        for key, value in (("retention_days", -1), ("retention_days", 1.5), ("retention_days", True),
-                           ("min_free_percent", 51), ("segment_minutes", 0), ("segment_minutes", "5")):
-            values = {**main.DEFAULT_STORAGE_SETTINGS, key: value}
-            self.assertEqual(self.client.post("/api/storage/settings", json=values).status_code, 400, (key, value))
-
     def test_broken_config_values_fall_back_to_defaults(self):
         loaded = main.load_storage_settings({"retention_days": "x", "segment_minutes": 0, "ismeretlen": 1})
         self.assertEqual(loaded, main.DEFAULT_STORAGE_SETTINGS)
+
+    def test_valid_config_values_are_used(self):
+        values = {"retention_days": 7, "min_free_percent": 0, "segment_minutes": 5}
+        self.assertEqual(main.load_storage_settings(values), values)
+
+    def test_camera_fps_comes_from_config(self):
+        self.assertEqual(main.load_camera_fps(0, {"fps": 5}), 5)
+        for bad in ("5", 0, -1, True):
+            self.assertEqual(main.load_camera_fps(0, {"fps": bad}), main.DEFAULT_FPS, bad)
+        self.assertEqual(main.load_camera_fps(0, {}), main.DEFAULT_FPS)
 
 
 class MaintenanceTests(ApiTestCase):
     def tight_disk(self):
         return mock.patch.object(main.shutil, "disk_usage", return_value=Usage(100, 96, 4))
-
-    def test_first_start_protects_existing_recordings(self):
-        os.remove(os.path.join(ARCHIVE, storage.PROTECTED_FILE))
-        path = add_recording("2020-01-01")
-        main.run_storage_maintenance()
-        self.assertTrue(self.exists(path))
-        self.assertEqual(storage.load_protected(ARCHIVE), {path})
 
     def test_expired_recording_is_deleted_and_logged(self):
         path = add_recording("2020-01-01")
@@ -236,7 +185,7 @@ class MaintenanceTests(ApiTestCase):
             self.assertIn(f"[AUTOMATIKUS TÖRLÉS] {path}", f.read())
 
     def test_low_space_stops_recording_and_refuses_start(self):
-        storage.save_protected(ARCHIVE, {add_recording()})
+        add_recording()
         main.recording_flags[0] = True
         with self.tight_disk(), mock.patch.object(storage, "run_cleanup", return_value=([], False)):
             self.assertIn("szabad hely", main.run_storage_maintenance())
@@ -245,21 +194,6 @@ class MaintenanceTests(ApiTestCase):
         self.assertEqual(response.status_code, 507)
         self.assertFalse(main.recording_flags[0])
         self.assertIn("szabad hely", self.client.get("/status").get_json()["storage_alert"])
-
-    def test_missing_marker_stops_recording_and_keeps_files(self):
-        path = add_recording("2020-01-01")
-        main.recording_flags[0] = True
-        with mock.patch.object(main, "REQUIRE_ARCHIVE_MARKER", True):
-            self.assertIn("nem érhető el", main.run_storage_maintenance())
-            self.assertFalse(main.recording_flags[0])
-            self.assertTrue(self.exists(path))
-            self.assertEqual(self.client.post("/toggle_record/0").status_code, 507)
-
-    def test_marker_present_allows_recording(self):
-        with open(os.path.join(ARCHIVE, main.ARCHIVE_MARKER_FILE), "w", encoding="utf-8"):
-            pass
-        with mock.patch.object(main, "REQUIRE_ARCHIVE_MARKER", True):
-            self.assertIsNone(main.run_storage_maintenance())
 
     def test_event_log_rotates_at_limit(self):
         with mock.patch.object(main, "EVENT_LOG_MAX_BYTES", 50):
@@ -276,7 +210,7 @@ class WriterTests(ApiTestCase):
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            main.write_queues[0].put((frame.copy(), fps, 0))
+            main.write_queues[0].put((frame.copy(), fps))
             time.sleep(1 / fps)
 
     def wait_until(self, condition, timeout=15):
@@ -311,7 +245,7 @@ class WriterTests(ApiTestCase):
         self.feed(1)
         self.assertEqual(len(main.active_recordings), 1)
         active_path = next(iter(main.active_recordings))
-        items = self.client.get("/api/videos").get_json()["items"]
+        items = self.client.get("/api/videos").get_json()
         self.assertTrue(next(i for i in items if i["path"] == active_path)["recording"])
         self.stop_recording()
 
