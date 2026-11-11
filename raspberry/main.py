@@ -78,7 +78,7 @@ DEFAULT_STORAGE_SETTINGS = {"retention_days": 30, "min_free_percent": 10, "segme
 STORAGE_CHECK_INTERVAL_S = 60
 EVENT_LOG_MAX_BYTES      = 5 * 1024 * 1024  # E fölött új naplófájl kezdődik, és csak az előző marad meg
 SHUTDOWN_WAIT_S          = 8        # A docker stop 10 mp után kényszerrel leállít
-SERVER_PORT              = 5000
+SERVER_PORT              = int(os.environ.get("PORT", "5000"))
 # Minden megnyitott élőkép végig lefoglal egy szálat. A korlát miatt a felület többi kérésének
 # mindig marad szabad szál, különben sok megnyitott élőkép mellett az egész oldal megállna.
 SERVER_THREADS           = 24

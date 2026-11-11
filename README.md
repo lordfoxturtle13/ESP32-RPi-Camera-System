@@ -24,11 +24,9 @@ Több kamerás megfigyelőrendszer ESP32-CAM és Luckfox kamerákkal. A szerver 
 
 ```
 ESP32-RPi-Camera-System/
-├── esp32_cam/              # ESP32-CAM firmware (PlatformIO / Arduino)
-│   └── src/
-│       ├── CameraWebServer_Proba01.ino
-│       ├── secrets.h       # WiFi adatok (gitignore-ban!)
-│       └── ...
+├── esp32_cam/              # ESP32-CAM firmware leírása (ESP32CAM-RTSP)
+│   ├── README.md           # Forrás, módosítások, végpontok, biztonsági megjegyzések
+│   └── settings.example.h  # Beállítófájl sablon, jelszavak nélkül
 └── raspberry/              # Raspberry Pi szerver
     ├── main.py             # Flask alkalmazás, Waitress szerverrel
     ├── storage.py          # Felvételek listázása és automatikus törlése
@@ -174,14 +172,9 @@ A távoli elérés a Pi-n is a fenti `tailscale serve --bg 5000` paranccsal kapc
 
 ## ESP32-CAM firmware
 
-A firmware PlatformIO-val tölthető fel. A WiFi adatokhoz hozd létre az `esp32_cam/src/secrets.h` fájlt az alábbi tartalommal (ez gitignore-ban van, ezért nem része a repónak):
+Az ESP32-CAM kamerák a nyílt forrású [ESP32CAM-RTSP](https://github.com/rzeldent/esp32cam-rtsp) firmware-t futtatják, kis módosításokkal. A telepítés lépései, a módosítások és a végpontok leírása az [`esp32_cam/README.md`](esp32_cam/README.md) fájlban található.
 
-```cpp
-const char* ssid     = "wifi-nev";
-const char* password = "wifi-jelszo";
-```
-
-Feltöltés után az ESP32 RTSP streamen szolgálja a képet: `rtsp://IP:554/mjpeg/1`
+Feltöltés után az ESP32 RTSP streamen szolgálja a képet: `rtsp://IP:554/mjpeg/1`, a vaku LED pedig a `http://IP/flash` címen vezérelhető.
 
 ## Hasznos parancsok
 
