@@ -166,18 +166,8 @@ recording_flags = {cam_id: False for cam_id in CAMERAS}
 # Képkocka sor a felvevő szálnak (maxsize=30 gátolja a RAM telítődést lassú írás esetén)
 write_queues = {cam_id: queue.Queue(maxsize=30) for cam_id in CAMERAS}
 
-def generate_dark_frame():
-    """
-    Egyszerű fekete JPEG képkocka offline állapothoz.
-    A vizuális megjelenítés (ikon, szöveg) a frontend CSS/JS feladata —
-    így sávszélesség takarékos. Quality=10 → ~1-2 KB fájlméret.
-    """
-    frame = np.zeros((REC_H, REC_W, 3), dtype=np.uint8)
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 10])
-    return buffer.tobytes()
-
-
-FRAME_OFFLINE = generate_dark_frame()
+# Fekete képkocka, amíg a kamerától nincs kép. A "NINCS JEL" feliratot a felület teszi rá.
+FRAME_OFFLINE = cv2.imencode(".jpg", np.zeros((REC_H, REC_W, 3), dtype=np.uint8))[1].tobytes()
 
 # Élőkép RAM-puffer: camera_worker szálak ide írják a legfrissebb JPEG-et,
 # a webszerver innen olvassa ki. Python GIL védi a dict-hozzáférést.
