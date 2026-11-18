@@ -81,8 +81,9 @@ SHUTDOWN_WAIT_S          = 8        # A docker stop 10 mp után kényszerrel le�
 SERVER_PORT              = int(os.environ.get("PORT", "5000"))
 # Minden megnyitott élőkép végig lefoglal egy szálat. A korlát miatt a felület többi kérésének
 # mindig marad szabad szál, különben sok megnyitott élőkép mellett az egész oldal megállna.
-SERVER_THREADS           = 24
-MAX_LIVE_STREAMS         = 20
+# Környezeti változóval felülírható (pl. terheléses teszthez), az alapérték a normál működésé
+SERVER_THREADS           = int(os.environ.get("SERVER_THREADS", "24"))
+MAX_LIVE_STREAMS         = int(os.environ.get("MAX_LIVE_STREAMS", "20"))
 # A Waitress alapból gyűjti a kis válaszokat, az élőkép képkockáit viszont azonnal ki kell küldeni
 SERVER_SEND_BYTES        = 1
 # A Waitress a kimeneti puffert csak ennél a méretnél cseréli újra, addig a már elküldött adat is
