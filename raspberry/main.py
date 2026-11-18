@@ -218,6 +218,9 @@ def camera_worker(camera_id):
     fps      = camera_fps[camera_id]
     interval = 1 / fps
     rotate   = camera.get("rotate_180") is True
+    # Opcionális kimeneti méret (config.json: "width", "height"). Akkor kell, ha a kamera
+    # torzított képarányú streamet ad, pl. a Luckfox live/1 704×576-ban küldi a 16:9-es képet.
+    size     = (camera["width"], camera["height"]) if camera.get("width") and camera.get("height") else None
     # A cv2 betűkészlete nem ismeri az ékezeteket
     name     = unicodedata.normalize("NFKD", camera["name"]).encode("ascii", "ignore").decode()
 
@@ -267,6 +270,8 @@ def camera_worker(camera_id):
             # az OSD előtt történik, hogy a felirat egyenes maradjon.
             if rotate:
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
+            if size and (frame.shape[1], frame.shape[0]) != size:
+                frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
 
             # OSD: kettős szöveg (fekete árnyék + fehér előtér) a kontrasztért.
             # A méret a felbontással arányos, így nagy képen is olvasható marad.
